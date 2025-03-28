@@ -149,7 +149,7 @@ if __name__ == "__main__":
     thetas = [0.1] * (2 * layer_count)  # Example parameter values
 
     # Run the QAOA circuit using the NetworkX graph.
-    run_qaoa_networkx(G, layer_count, thetas)
+    create_qaoa_networkx(G, layer_count, thetas)
 
     # For demonstration, extract edge parameters and build the Hamiltonian.
     edges = list(G.edges())
