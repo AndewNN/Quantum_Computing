@@ -76,12 +76,16 @@ def get_graph_from_path(cls, path):
     return G
 
 @classmethod
-def evaluate_cut(self, bitstring: list[int], Graphdata) -> float:
+def evaluate_cut(self, bitstring: list[int], Graphdata, is_weighted: bool = True) -> float:
     """
     Evaluates the cut value of the graph for a given partition represented by a bitstring.
     
     Parameters:
         bitstring (list[int]): A list of integers (0 or 1) representing the partition of nodes.
+
+        Graphdata (list[tuple]): A list of tuples representing the edges of the graph.
+
+        is_weighted (bool): Flag to determine if the graph is weighted.
         
     Returns:
         float: The sum of weights for edges crossing the partition.
@@ -92,7 +96,7 @@ def evaluate_cut(self, bitstring: list[int], Graphdata) -> float:
     cut_value = 0
     for u, v, data in Graphdata:
         if bitstring[u] != bitstring[v]:
-            cut_value += data.get('weight', 1)
+            cut_value += data.get('weight', 1) if is_weighted else 1
     return cut_value
 
 
