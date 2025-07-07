@@ -12,6 +12,7 @@ This module includes:
 
 import networkx as nx
 from typing import List, Tuple
+import numpy as np
 
 # Import cudaq and its associated spin operators.
 import cudaq
@@ -131,6 +132,72 @@ def hamiltonian_max_cut(edges_src: List[int], edges_tgt: List[int],
         hamiltonian += 0.5 * weight * (spin.z(qubitu) * spin.z(qubitv) -
                                        spin.i(qubitu) * spin.i(qubitv))
     return hamiltonian
+
+
+def po_normalize(B, P, ret, cov):
+    P_b = P / B
+    ret_b = ret * P_b
+    cov_b = np.diag(P_b) @ cov @ np.diag(P_b)
+    
+    n_max = np.int32(np.floor(np.log2(B/P))) + 1
+    print("n_max:", n_max)
+    n_qs = np.cumsum(n_max)
+    n_qs = np.insert(n_qs, 0, 0)
+    n_qubit = n_qs[-1]
+    C = np.zeros((len(P), n_qubit))
+    for i in range(len(P)):
+         for j in range(n_max[i]):
+              C[i, n_qs[i] + j] = 2**j
+
+    P_bb = C.T @ P_b
+    ret_bb = C.T @ ret_b
+    print("ret_bb:", ret_bb)
+    cov_bb = C.T @ cov_b @ C
+    return P_bb, ret_bb, cov_bb, int(n_qubit)
+
+def ret_cov_to_QUBO(ret: np.ndarray, cov: np.ndarray, P: np.ndarray, lamb: float, q:float) -> np.ndarray:
+    di = np.diag(ret + lamb * (P*P + 2*P))
+    mat = 2 * lamb * np.outer(P, P) + q * cov
+    return di - mat
+
+def qubo_to_ising(qubo: np.ndarray, lamb: float) -> cudaq.SpinOperator:
+    spin_op = lamb
+    for i in range(qubo.shape[0]):
+        for j in range(qubo.shape[1]):
+                if i != j:
+                    spin_op += qubo[i, j] * ((spin.i(i) - spin.z(i)) / 2 * (spin.i(j) - spin.z(j)) / 2)
+                else:
+                    spin_op += qubo[i, j] * (spin.i(i) - spin.z(i)) / 2
+    return spin_op
+
+def process_ansatz_values(H: cudaq.SpinOperator) -> Tuple[List[int], List[float], List[int], List[int], List[float]]:
+    HH = H.get_raw_data()
+
+    idxs = [[j - len(HH[0][i])//2 for j in range(len(HH[0][i])) if HH[0][i][j]] for i in range(len(HH[0]))]
+
+    HH = [(idxs[i], HH[1][i], sum(HH[0][i])) for i in range(len(HH[0]))]
+    HH = sorted(HH, key=lambda x: (x[2], x[0]), reverse=False)
+
+    idx_1 = []
+    coeff_1 = []
+    idx_2_a, idx_2_b = [], []
+    coeff_2 = []
+    for i in range(len(HH)):
+        if HH[i][2] == 1:
+            idx_1.append(HH[i][0][0])
+            coeff_1.append(HH[i][1].real)
+        elif HH[i][2] == 2:
+            idx_2_a.append(HH[i][0][0])
+            idx_2_b.append(HH[i][0][1])
+            coeff_2.append(HH[i][1].real)
+    # print(HH)
+
+    return idx_1, coeff_1, idx_2_a, idx_2_b, coeff_2
+
+
+
+
+
 
 # Optional: a test routine when the module is executed as a script.
 if __name__ == "__main__":
