@@ -164,9 +164,9 @@ def qubo_to_ising(qubo: np.ndarray, lamb: float) -> cudaq.SpinOperator:
     spin_op = lamb
     for i in range(qubo.shape[0]):
         for j in range(qubo.shape[1]):
-                if i != j:
+                if i != j and qubo[i, j] != 0:
                     spin_op += qubo[i, j] * ((spin.i(i) - spin.z(i)) / 2 * (spin.i(j) - spin.z(j)) / 2)
-                else:
+                elif i == j and qubo[i, j] != 0:
                     spin_op += qubo[i, j] * (spin.i(i) - spin.z(i)) / 2
     return spin_op
 
@@ -183,6 +183,8 @@ def process_ansatz_values(H: cudaq.SpinOperator) -> Tuple[List[int], List[float]
     idx_2_a, idx_2_b = [], []
     coeff_2 = []
     for i in range(len(HH)):
+        if HH[i][1].real == 0:
+            continue
         if HH[i][2] == 1:
             idx_1.append(HH[i][0][0])
             coeff_1.append(HH[i][1].real)
