@@ -182,6 +182,7 @@ def process_ansatz_values(H: cudaq.SpinOperator) -> Tuple[List[int], List[float]
     coeff_1 = []
     idx_2_a, idx_2_b = [], []
     coeff_2 = []
+    # print("HH:", HH)
     for i in range(len(HH)):
         if HH[i][1].real == 0:
             continue
