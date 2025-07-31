@@ -153,7 +153,7 @@ def po_normalize(B, P, ret, cov):
     ret_bb = C.T @ ret_b
     print("ret_bb:", ret_bb)
     cov_bb = C.T @ cov_b @ C
-    return P_bb, ret_bb, cov_bb, int(n_qubit)
+    return P_bb, ret_bb, cov_bb, int(n_qubit), n_max, C
 
 def ret_cov_to_QUBO(ret: np.ndarray, cov: np.ndarray, P: np.ndarray, lamb: float, q:float) -> np.ndarray:
     di = np.diag(ret + lamb * (P*P + 2*P))
@@ -197,7 +197,13 @@ def process_ansatz_values(H: cudaq.SpinOperator) -> Tuple[List[int], List[float]
 
     return idx_1, coeff_1, idx_2_a, idx_2_b, coeff_2
 
-
+def state_to_return(s, B, C, d_ret, d_p):
+    l = np.array(list(map(int, s)))
+    P = d_p @ C
+    ret_C = (d_ret * d_p) @ C
+    ss = l @ ret_C
+    bud = l @ P
+    return ss, bud <= B
 
 
 

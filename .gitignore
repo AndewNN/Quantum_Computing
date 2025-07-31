@@ -2,3 +2,5 @@ dataset/*
 CUDA/output/*
 CUDA/output_PO/*
 Reports/
+*.pyc
+*.npy
