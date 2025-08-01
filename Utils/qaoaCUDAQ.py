@@ -13,6 +13,7 @@ This module includes:
 import networkx as nx
 from typing import List, Tuple
 import numpy as np
+from math import sqrt
 
 # Import cudaq and its associated spin operators.
 import cudaq
@@ -171,6 +172,7 @@ def qubo_to_ising(qubo: np.ndarray, lamb: float) -> cudaq.SpinOperator:
     return spin_op
 
 def process_ansatz_values(H: cudaq.SpinOperator) -> Tuple[List[int], List[float], List[int], List[int], List[float]]:
+    
     HH = H.get_raw_data()
 
     idxs = [[j - len(HH[0][i])//2 for j in range(len(HH[0][i])) if HH[0][i][j]] for i in range(len(HH[0]))]
@@ -205,6 +207,161 @@ def state_to_return(s, B, C, d_ret, d_p):
     bud = l @ P
     return ss, bud <= B
 
+def pauli_to_int(pauli_str: str) -> int:
+    value = 0
+    for i, char in enumerate(pauli_str):
+        if char == 'I':
+            value |= (1 << (2 * i)) * 0
+        elif char == 'X':
+            value |= (1 << (2 * i)) * 1
+        elif char == 'Y':
+            value |= (1 << (2 * i)) * 2
+        elif char == 'Z':
+            value |= (1 << (2 * i)) * 3
+    return value
+
+def int_to_pauli(value: int, n_qubits: int) -> str:
+    pauli_str = ""
+    for i in range(n_qubits):
+        if (value >> 2*i) % 4 == 0:
+            pauli_str += 'I'
+        elif (value >> 2*i) % 4 == 1:
+            pauli_str += 'X'
+        elif (value >> 2*i) % 4 == 2:
+            pauli_str += 'Y'
+        elif (value >> 2*i) % 4 == 3:
+            pauli_str += 'Z'
+    return pauli_str
+
+def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], List[float]]:
+    def init_pauli(x, y):
+        if x == "0" and y == "0":
+            A = spin.i(0) + spin.z(0)
+            # B = spin.i(0) + spin.z(0)
+            B = 0
+        elif x == "0" and y == "1":
+            A = spin.x(0)
+            B = -spin.y(0)
+        elif x == "1" and y == "0":
+            A = spin.x(0)
+            B = spin.y(0)
+        elif x == "1" and y == "1":
+            A = spin.i(0) - spin.z(0)
+            # B = spin.i(0) - spin.z(0)
+            B = 0
+        return A, B
+
+    def transform_pauli(x, y, idx, A, B):
+        if x == "0" and y == "0":
+            A_, B_ = 0.5 * A * (spin.i(idx) + spin.z(idx)), 0.5 * B * (spin.i(idx) + spin.z(idx))
+        elif x == "0" and y == "1":
+            A_, B_ = 0.5 * (A * spin.x(idx) + B * spin.y(idx)), 0.5 * (B * spin.x(idx) - A * spin.y(idx))
+        elif x == "1" and y == "0":
+            A_, B_ = 0.5 * (A * spin.x(idx) - B * spin.y(idx)), 0.5 * (B * spin.x(idx) + A * spin.y(idx))
+        elif x == "1" and y == "1":
+            A_, B_ = 0.5 * A * (spin.i(idx) - spin.z(idx)), 0.5 * B * (spin.i(idx) - spin.z(idx))
+        return A_, B_
+    
+    def get_pauli(X, Y):
+        A, B = init_pauli(X[0], Y[0])
+        for i in range(1, len(X)):
+            A, B = transform_pauli(X[i], Y[i], i, A, B)
+        return A, B
+        
+    A_all, B_all = 0, 0
+    for i in range(T.shape[0]):
+        for j in range(i + 1, T.shape[1]):
+            A_now, B_now = get_pauli(bases[i], bases[j])
+            A_all += T[i, j] * A_now
+            B_all += T[i, j] * B_now
+    
+    ret_s, ret_c = [], []
+
+    for i in A_all:
+        s = i.get_pauli_word(n_qubits)
+        c = i.evaluate_coefficient()
+        if len(s) > 0 and c.real != 0:
+            # ret_s.append(pauli_to_int(s))
+            ret_s.append(s)
+            # print(s)
+            ret_c.append(c.real)
+    
+    return ret_s, ret_c
+
+def reversed_str_bases_to_init_state(bases: List[str], n_qb: int) -> np.ndarray:
+    assert len(bases[0]) == n_qb, f"Length of bases: {len(bases[0])} must match number of qubits: {n_qb}"
+
+    init_state = np.zeros(2**n_qb, dtype=cudaq.complex())
+    for base in bases:
+        base_i = int(base[::-1], 2)
+        init_state[base_i] = 1.0 / sqrt(len(bases))
+    return init_state
+
+@cudaq.kernel
+def kernel_qaoa_X(thetas: List[float], qubit_count: int, layer_count: int, idx_1: List[int], coeff_1: List[float], idx_2_a: List[int], idx_2_b: List[int], coeff_2: List[float]):
+    qreg = cudaq.qvector(qubit_count)
+    # qreg = cudaq.qvector(3)
+    h(qreg)
+
+    for i in range(layer_count):
+        # for idxs, coeff, l in sorted_raw_ham:
+        #     if l == 1:
+        #         rz(2 * coeff * thetas[i], qreg[idxs[0]])
+        #     elif l == 2:
+        #         x.ctrl(qreg[idxs[0]], qreg[idxs[1]])
+        #         rz(2 * coeff * thetas[i], qreg[idxs[1]])
+        #         x.ctrl(qreg[idxs[0]], qreg[idxs[1]])
+        # for i in range(qubit_count):
+        #     rx(2.0 * thetas[layer_count + i], qreg[i])
+
+        for j in range(len(idx_1)):
+            rz(2 * coeff_1[j] * thetas[i], qreg[idx_1[j]])
+        
+        for j in range(len(idx_2_a)):
+            x.ctrl(qreg[idx_2_a[j]], qreg[idx_2_b[j]])
+            rz(2 * coeff_2[j] * thetas[i], qreg[idx_2_b[j]])
+            x.ctrl(qreg[idx_2_a[j]], qreg[idx_2_b[j]])
+
+        for j in range(qubit_count):
+            rx(2.0 * thetas[layer_count + i], qreg[j])
+            
+@cudaq.kernel
+def kernel_qaoa_Preserved(thetas: List[float], qubit_count: int, layer_count: int, idx_1: List[int], coeff_1: List[float], idx_2_a: List[int], idx_2_b: List[int], coeff_2: List[float], mixer_str: List[cudaq.pauli_word], mixer_coeff: List[float], init_sup: List[complex]):
+    # qreg = cudaq.qvector(qubit_count)
+    # h(qreg)
+
+    # qreg = cudaq.qvector([0.+0j, 0.577350269, 0.577350269, 0., 0.577350269, 0., 0., 0.])
+    # qreg = cudaq.qvector([0.+0j, 0.577350269, 0.577350269, 0., 0., 0., 0., 0., 0.577350269, 0., 0., 0., 0., 0., 0., 0.])
+    qreg = cudaq.qvector(init_sup)
+    
+    for i in range(layer_count):
+
+        for j in range(len(idx_1)):
+            rz(2 * coeff_1[j] * thetas[i], qreg[idx_1[j]])
+        
+        for j in range(len(idx_2_a)):
+            x.ctrl(qreg[idx_2_a[j]], qreg[idx_2_b[j]])
+            rz(2 * coeff_2[j] * thetas[i], qreg[idx_2_b[j]])
+            x.ctrl(qreg[idx_2_a[j]], qreg[idx_2_b[j]])
+
+        for j in range(len(mixer_str)):
+            exp_pauli(mixer_coeff[j] * thetas[layer_count + i], qreg, mixer_str[j])
+
+        # for j in range(qubit_count):
+        #     rx(2.0 * thetas[layer_count + i], qreg[j])
+
+optimizer_names = ["Nelder-Mead", "COBYLA", "SPSA", "Adam", "GradientDescent"]
+def get_optimizer(idx):
+    optimizer1 = cudaq.optimizers.NelderMead()
+    optimizer2 = cudaq.optimizers.COBYLA()
+    optimizer3 = cudaq.optimizers.SPSA()
+    optimizer4 = cudaq.optimizers.Adam()
+    optimizer5 = cudaq.optimizers.GradientDescent()
+
+    optimizer = [optimizer1, optimizer2, optimizer3, optimizer4, optimizer5][idx]
+    optimizer_name = optimizer_names[idx]
+    FIND_GRAD = True if optimizer.requires_gradients() else False
+    return optimizer, optimizer_name, FIND_GRAD
 
 
 
