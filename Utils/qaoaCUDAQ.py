@@ -141,7 +141,7 @@ def po_normalize(B, P, ret, cov):
     cov_b = np.diag(P_b) @ cov @ np.diag(P_b)
     
     n_max = np.int32(np.floor(np.log2(B/P))) + 1
-    print("n_max:", n_max)
+    # print("n_max:", n_max)
     n_qs = np.cumsum(n_max)
     n_qs = np.insert(n_qs, 0, 0)
     n_qubit = n_qs[-1]
@@ -152,7 +152,7 @@ def po_normalize(B, P, ret, cov):
 
     P_bb = C.T @ P_b
     ret_bb = C.T @ ret_b
-    print("ret_bb:", ret_bb)
+    # print("ret_bb:", ret_bb)
     cov_bb = C.T @ cov_b @ C
     return P_bb, ret_bb, cov_bb, int(n_qubit), n_max, C
 
