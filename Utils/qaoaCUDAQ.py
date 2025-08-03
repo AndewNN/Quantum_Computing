@@ -233,7 +233,7 @@ def int_to_pauli(value: int, n_qubits: int) -> str:
             pauli_str += 'Z'
     return pauli_str
 
-def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], List[float]]:
+def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
     def init_pauli(x, y):
         if x == "0" and y == "0":
             A = spin.i(0) + spin.z(0)
@@ -286,7 +286,7 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
             # print(s)
             ret_c.append(c.real)
     
-    return ret_s, ret_c
+    return ret_s, np.array(ret_c)
 
 def reversed_str_bases_to_init_state(bases: List[str], n_qb: int) -> np.ndarray:
     assert len(bases[0]) == n_qb, f"Length of bases: {len(bases[0])} must match number of qubits: {n_qb}"
@@ -363,6 +363,31 @@ def get_optimizer(idx):
     FIND_GRAD = True if optimizer.requires_gradients() else False
     return optimizer, optimizer_name, FIND_GRAD
 
+def all_state_to_return(B, C, d_ret, d_p, over_budget_bound):
+    qb = C.shape[1]
+    l = np.zeros((1<<qb, qb))
+    P = d_p @ C
+    ret_C = (d_ret * d_p) @ C
+    for i in range(1<<qb):
+        s = bin(i)[2:].zfill(qb)
+        ll = np.array(list(map(int, s)))
+        l[i] = ll
+    ss = l @ ret_C
+    bud = l @ P
+    return ss, bud <= B * over_budget_bound
+
+def get_init_states(state_return, in_budget, init_state_ratio, n_qubits):
+    sorted_idx = np.argsort(-state_return)
+    N = int(len(state_return) * init_state_ratio)
+    init_states = []
+    cou = 0
+    for i in sorted_idx:
+        if in_budget[i]:
+            init_states.append(bin(i)[2:].zfill(n_qubits))
+            cou += 1
+        if cou >= N:
+            break
+    return init_states
 
 
 # Optional: a test routine when the module is executed as a script.
