@@ -350,6 +350,12 @@ def kernel_qaoa_Preserved(thetas: List[float], qubit_count: int, layer_count: in
         # for j in range(qubit_count):
         #     rx(2.0 * thetas[layer_count + i], qreg[j])
 
+@cudaq.kernel
+def kernel_flipped(state: cudaq.State, n_qb: int):
+    q = cudaq.qvector(state)
+    for i in range(n_qb//2):
+        swap(q[i], q[n_qb - 1 - i])
+
 optimizer_names = ["Nelder-Mead", "COBYLA", "SPSA", "Adam", "GradientDescent"]
 def get_optimizer(idx):
     optimizer1 = cudaq.optimizers.NelderMead()
