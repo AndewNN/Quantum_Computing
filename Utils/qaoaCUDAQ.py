@@ -14,7 +14,9 @@ import networkx as nx
 from typing import List, Tuple
 import numpy as np
 from math import sqrt
-
+import math
+import pandas as pd
+import os
 # Import cudaq and its associated spin operators.
 import cudaq
 from cudaq import spin
@@ -394,6 +396,60 @@ def get_init_states(state_return, in_budget, init_state_ratio, n_qubits):
         if cou >= N:
             break
     return init_states
+
+def find_budget(target_qubit, P, min_P, max_P):
+    n_assets = len(P)
+    mi, ma = min_P, max_P * ((1 << math.ceil(target_qubit/n_assets))-1)
+    cou = 0
+    mid = (mi + ma)/2
+    while (N := np.sum(np.int32(np.floor(np.log2(mid/P))) + 1)) != target_qubit:
+        if N < target_qubit:
+            mi = mid
+        else:
+            ma = mid
+        # print()
+        mid = (mi + ma)/2
+        cou += 1
+        if cou > 100:
+            assert False, "Cannot find budget for target qubit uwaaaaa (Should not happen, Please tell trusted adult lol)"
+    return mid
+
+def all_state_to_return(B, C, d_ret, d_p, over_budget_bound):
+    qb = C.shape[1]
+    l = np.zeros((1<<qb, qb))
+    P = d_p @ C
+    ret_C = (d_ret * d_p) @ C
+    for i in range(1<<qb):
+        s = bin(i)[2:].zfill(qb)
+        ll = np.array(list(map(int, s)))
+        l[i] = ll
+    ss = l @ ret_C
+    bud = l @ P
+    return ss, bud <= B * over_budget_bound
+
+def get_init_states(state_return, in_budget, num_init_bases, n_qubits):
+    sorted_idx = np.argsort(-state_return)
+    N = num_init_bases
+    init_states = []
+    cou = 0
+    for i in sorted_idx:
+        if in_budget[i]:
+            init_states.append(bin(i)[2:].zfill(n_qubits))
+            cou += 1
+        if cou >= N:
+            break
+    return init_states
+
+def write_df(df_dir, report_col, *data):
+    df_new = pd.DataFrame(np.array(data).reshape(1, -1), columns=report_col)
+    m_df = os.path.exists(df_dir)
+    # print(df_dir)
+    df_new.to_csv(df_dir, mode='a' if m_df else 'w', header=(not m_df), index=False)
+
+def clip_df(df, restore_iter):
+    assert restore_iter <= len(df), "restore_iter exceeds the number of iterations in the CSV file."
+    df = df.iloc[:restore_iter]
+    return df
 
 
 # Optional: a test routine when the module is executed as a script.
