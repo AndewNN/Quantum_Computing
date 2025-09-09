@@ -72,6 +72,13 @@ def parse_args():
         help="Volatility Weight (float)"
     )
 
+    # QAOA Layers
+    parser.add_argument(
+        "-l", "--layer",
+        type=int, default=5,
+        help="Number of QAOA layers (int)"
+    )
+
     return parser.parse_args()
 
 args = parse_args()
@@ -89,6 +96,7 @@ TARGET_QUBIT_IN = args.qubit
 N_ASSETS_IN = args.asset
 LAMB = args.lamb # Budget Penalty
 Q = args.q # Volatility Weight
+LAYER = args.layer
 
 # num_init_bases = int(2**TARGET_QUBIT * init_state_ratio)
 num_init_bases_in = args.bases
@@ -135,26 +143,8 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
     for N_ASSETS in N_ASSETS_IN:
         for num_init_bases in num_init_bases_in:
 
-            ################################################################ Skip already done
-            # if num_init_bases == 3:
-            #     if N_ASSETS == 3:
-            #         continue
-            #     if N_ASSETS == 4 and TARGET_QUBIT <= 9:
-            #         continue
-            # if TARGET_QUBIT == 4 and N_ASSETS == 3:
-            #     continue
-            # if TARGET_QUBIT == 4 and N_ASSETS == 4 and num_init_bases == 3:
-            #     continue
-            # if TARGET_QUBIT <= 6:
-            #     continue
-            # if TARGET_QUBIT == 7 and N_ASSETS == 3 and num_init_bases == 3:
-            #     continue
-            ################################################################
-
             if TARGET_QUBIT < N_ASSETS:
                 continue
-
-
 
             print(f"Target Qubit: {TARGET_QUBIT}, N Assets: {N_ASSETS}, Num Init Bases: {num_init_bases}")
             # continue
@@ -170,7 +160,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             # os.makedirs(f"{dir_path}/Preserving", exist_ok=True)
             os.makedirs(f"{dir_path}/expectations_X", exist_ok=True)
             os.makedirs(f"{dir_path}/expectations_Preserving", exist_ok=True)
-            os.makedirs(f"{dir_path}/iter_states", exist_ok=True)
+            # os.makedirs(f"{dir_path}/iter_states", exist_ok=True)
 
             # continue
 
@@ -189,9 +179,9 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     df = clip_df(df, restore_iter)
                     df.to_csv(f"{dir_path}/{mode}.csv", index=False)
 
-                with open(f"{dir_path}/iter_states/{str(restore_iter).zfill(4)}.pkl", "rb") as f:
-                    state = pickle.load(f)
-                np.random.set_state(state)
+                for i in range(restore_iter):
+                    np.random.rand(N_ASSETS, N_ASSETS)
+                    np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
             else:
                 for curr_dir, dirs, files in os.walk(dir_path):
                     for file in files:
@@ -209,8 +199,6 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 #     # tr = tracker.SummaryTracker()
                 #     print("Start Tracking GB")
                 #     ch_tr = False
-                with open(f"{dir_path}/iter_states/{str(i).zfill(4)}.pkl", "wb") as f:
-                    pickle.dump(np.random.get_state(), f)
 
                 pbar.set_description("global:init_1")
                 st = time.time()
@@ -255,7 +243,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     kernel_qaoa_use = kernel_qaoa_X if mode == "X" else kernel_qaoa_Preserved
 
                     idx = 3
-                    layer_count = 5
+                    layer_count = LAYER
                     parameter_count = layer_count * 2
                     optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
                     optimizer.max_iterations = 1000
