@@ -259,6 +259,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     parameter_count = layer_count * 2
                     optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
                     optimizer.max_iterations = 1000
+                    optimizer.initial_parameters = np.random.uniform(-np.pi / 8, np.pi / 8, parameter_count)
 
                     if mode == "X":
                         ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
