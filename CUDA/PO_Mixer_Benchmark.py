@@ -303,7 +303,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                         exp_return = cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation()
                         if cal_expectation:
                             exp_return_in = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation()
-                            expectations.append([exp_return_in, exp_return])
+                            expectations.append([float(exp_return_in), float(exp_return)])
                         return exp_return
                         #     exp_return = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param, execution=cudaq.parallel.thread).expectation()
                         #     expectations.append(exp_return)
