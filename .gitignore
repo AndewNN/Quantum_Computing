@@ -4,4 +4,4 @@ CUDA/output_PO/*
 Reports/
 *.pyc
 *.npy
-CUDA/experiments/*
+CUDA/experiments*

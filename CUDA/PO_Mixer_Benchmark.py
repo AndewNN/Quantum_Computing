@@ -34,6 +34,13 @@ state = np.random.get_state()
 modes = ["X", "Preserving"]
 report_col = ["Approximate_ratio", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "observe_time"]
 
+# PIPELINE PARAMETERS
+LOOP = 100
+oversample_factor = 5
+over_budget_bound = 1.0 # valid budget in [0, B * over_budget_bound]
+min_P, max_P = 125, 250
+hamiltonian_boost = 2000
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Experiment parameter sweep")
 
@@ -65,7 +72,7 @@ def parse_args():
         help="List of num initial bases, e.g. -B 3 6 12 25"
     )
 
-    # Small q
+    # Volatility
     parser.add_argument(
         "-q",
         type=int, default=0,
@@ -79,16 +86,23 @@ def parse_args():
         help="Number of QAOA layers (int)"
     )
 
+    # start iter
+    parser.add_argument(
+        "-st", "--start_iter",
+        type=int, default=0,
+        help="Number of iterations (int)"
+    )
+
+    # end iter (run from start to end-1)
+    parser.add_argument(
+        "-ed", "--end_iter",
+        type=int, default=LOOP,
+        help="Number of iterations (int)"
+    )
+
     return parser.parse_args()
 
 args = parse_args()
-
-# PIPELINE PARAMETERS
-LOOP = 100
-oversample_factor = 5
-over_budget_bound = 1.0 # valid budget in [0, B * over_budget_bound]
-min_P, max_P = 125, 250
-hamiltonian_boost = 2000
 
 # HYPER PARAMETERS
 init_state_ratio = 0.1
@@ -100,6 +114,8 @@ LAYER = args.layer
 
 # num_init_bases = int(2**TARGET_QUBIT * init_state_ratio)
 num_init_bases_in = args.bases
+iter_start = args.start_iter
+iter_end = args.end_iter
 
 # print(TARGET_QUBIT_IN)
 # print(N_ASSETS_IN, type(N_ASSETS_IN))
@@ -136,7 +152,7 @@ assert samples.shape[0] > max(N_ASSETS_IN) * LOOP, "Please increase the oversamp
 # samples = samples.to_numpy()
 # plt.show()
 
-
+np.random.set_state(state)
 state_init_loop = np.random.get_state()
 ch_tr = True
 for TARGET_QUBIT in TARGET_QUBIT_IN:
@@ -149,6 +165,8 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             print(f"Target Qubit: {TARGET_QUBIT}, N Assets: {N_ASSETS}, Num Init Bases: {num_init_bases}")
             # continue
             dir_name = f"exp_Q{TARGET_QUBIT}_A{N_ASSETS}_L{LAMB}_q{Q}_B{num_init_bases}"
+            if iter_start != 0 or iter_end != LOOP:
+                dir_name += f"_it{iter_start}-{iter_end-1}"
             dir_name_Xbase = f"exp_Q{TARGET_QUBIT}_A{N_ASSETS}_L{LAMB}_q{Q}_B3"
             dir_path = f"./experiments/{dir_name}"
             dir_path_Xbase = f"./experiments/{dir_name_Xbase}"
@@ -165,35 +183,41 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             # continue
 
             np.random.set_state(state_init_loop)
-            restore_iter = 0
+            restore_iter = iter_start
             if os.path.exists(f"{dir_path}/X.csv") and os.path.exists(f"{dir_path}/Preserving.csv"):
                 for mode in modes:
                     df = pd.read_csv(f"./{dir_path}/{mode}.csv")
-                    if restore_iter > 0:
-                        restore_iter = min(restore_iter, df.shape[0])
+                    if restore_iter > iter_start:
+                        restore_iter = min(restore_iter, df.shape[0] + iter_start)
                     else:
-                        restore_iter = df.shape[0]
+                        restore_iter = df.shape[0] + iter_start
 
                 for mode in modes:
                     df = pd.read_csv(f"./{dir_path}/{mode}.csv")
-                    df = clip_df(df, restore_iter)
+                    df = clip_df(df, restore_iter - iter_start)
                     df.to_csv(f"{dir_path}/{mode}.csv", index=False)
 
-                for i in range(restore_iter):
-                    np.random.rand(N_ASSETS, N_ASSETS)
-                    np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
             else:
                 for curr_dir, dirs, files in os.walk(dir_path):
                     for file in files:
                         os.remove(os.path.join(curr_dir, file))
 
+            for i in range(restore_iter):
+                np.random.rand(N_ASSETS, N_ASSETS)
+                np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
+
             X_exist = False
             if os.path.exists(f"{dir_path_Xbase}/result.csv"):
                 shutil.copyfile(f"{dir_path_Xbase}/X.csv", f"{dir_path}/X.csv")
-                shutil.copytree(f"{dir_path_Xbase}/expectations_X", f"{dir_path}/expectations_X", dirs_exist_ok=True)
+                x_csv = pd.read_csv(f"{dir_path}/X.csv")
+                x_csv = x_csv.iloc[iter_start:iter_end]
+                x_csv.to_csv(f"{dir_path}/X.csv", index=False)
+                # shutil.copytree(f"{dir_path_Xbase}/expectations_X", f"{dir_path}/expectations_X", dirs_exist_ok=True)
+                for f_i in range(iter_start, iter_end):
+                    shutil.copyfile(f"{dir_path_Xbase}/expectations_X/expectations_{f_i}.npy", f"{dir_path}/expectations_X/expectations_{f_i}.npy")
                 X_exist = True
-                
-            pbar = tqdm(range(restore_iter, LOOP))
+
+            pbar = tqdm(range(restore_iter, iter_end))
             for i in pbar:
                 # if i == 1 and ch_tr:
                 #     # tr = tracker.SummaryTracker()
@@ -229,6 +253,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
 
                 for mode in modes:
                     if mode == "X" and X_exist:
+                        np.random.uniform(-np.pi / 8, np.pi / 8, 2 * LAYER)
                         continue
                     pbar.set_description(f"{mode}:init_2")
                     st = time.time()
@@ -247,7 +272,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     parameter_count = layer_count * 2
                     optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
                     optimizer.max_iterations = 1000
-                    optimizer.initial_parameters = np.random.uniform(-np.pi / 8, np.pi / 8, parameter_count)
+                    optimizer.initial_parameters = np.random.uniform(-np.pi / 8, np.pi / 8, 2 * LAYER)
 
                     if mode == "X":
                         ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
@@ -276,10 +301,10 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     def cost_func(parameters, cal_expectation=False):
                         # return cudaq.observe(kernel_qaoa, H, n_qubit, layer_count, parameters, 0).expectation()
                         if cal_expectation:
-                            exp_return = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation()
-                            expectations.append(exp_return)
-                        return cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation()
-                    
+                            exp_return_in = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation()
+                            exp_return = cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation()
+                            expectations.append([exp_return_in, exp_return])
+                        return exp_return
                         #     exp_return = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param, execution=cudaq.parallel.thread).expectation()
                         #     expectations.append(exp_return)
                         # return cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param, execution=cudaq.parallel.thread).expectation()
