@@ -13,7 +13,7 @@ This module includes:
 import networkx as nx
 from typing import List, Tuple
 import numpy as np
-from math import sqrt
+from math import sqrt, pi
 import math
 import pandas as pd
 import os
@@ -357,6 +357,125 @@ def kernel_flipped(state: cudaq.State, n_qb: int):
     q = cudaq.qvector(state)
     for i in range(n_qb//2):
         swap(q[i], q[n_qb - 1 - i])
+
+@cudaq.kernel
+def kernel_cmpz_Preserved(thetas: List[float], qubit_count: int, layer_count: int, params: List[float], init_sup: List[complex]):
+    qreg = cudaq.qvector(init_sup)
+
+    for i in range(layer_count):
+        for j in range(len(params) // 6):
+            typee = params[6 * j]
+            idx = int(params[6 * j + 1])
+            zeta = params[6*j+2] + thetas[i] * params[6*j+3] + thetas[i+layer_count] * params[6*j+4]
+
+            if typee  == 0: # RX
+                rx(zeta, qreg[idx])
+            elif typee == 1: # RY
+                ry(zeta, qreg[idx])
+            elif typee == 2: # RZ
+                rz(zeta, qreg[idx])
+            elif typee == 3: # H
+                h(qreg[idx])
+            elif typee == 4: # CX-control
+                cx(qreg[idx], qreg[int(params[6*j+5])])
+
+
+def prepare_preserving_ansatz(qubit_count: int, idx_1: List[int], coeff_1: List[float], idx_2_a: List[int], idx_2_b: List[int], coeff_2: List[float], mixer_str: List[cudaq.pauli_word], mixer_coeff: List[float]):
+    def generate_list():
+        return [[] for _ in range(qubit_count)]
+    type_l, zeta_l, entang_l, runnum_l = [generate_list() for _ in range(4)]
+    cou = 0
+    all_gate, mk = [], []
+    def remove(idx):
+        tp = type_l[idx].pop()
+        zt = zeta_l[idx].pop()
+        et = entang_l[idx].pop()
+        rn = runnum_l[idx].pop()
+        mk[rn] = False
+        # print("-", idx, rn, tp, zt, et)
+    def add(typee, idx, zeta, idx_en):
+        nonlocal cou
+        # print("+", idx, cou, typee, zeta, idx_en)
+        type_l[idx].append(typee)
+        zeta_l[idx].append(zeta)
+        entang_l[idx].append(idx_en)
+        runnum_l[idx].append(cou)
+        mk.append(typee != 5)
+        all_gate.append([typee, idx, *zeta, idx_en])
+        cou += 1
+    def nplize(a):
+        for i in range(len(a)):
+            a[i] = np.array(a[i], dtype=np.float32)
+        return a
+    def is_zero(val, bound=1e-8):
+        return abs(val) < bound
+    def push(typee, idx, zeta=[0, 0, 0], idx_en=-1): # typee[0: RX, 1: RY, 2: RZ, 3: H, 4: CX-control, 5: CX-target], zeta: (const_coeff, problem_coeff, mixer_coeff)
+        nonlocal cou
+        # print("*", idx, cou, typee, zeta, idx_en)
+        if len(type_l[idx]) > 0 and type_l[idx][-1] == typee:
+            if typee <= 3:
+                if not (is_zero(zeta_l[idx][-1][0] + zeta[0]) and is_zero(zeta_l[idx][-1][1] + zeta[1]) and is_zero(zeta_l[idx][-1][2] + zeta[2])):
+                    for i in range(3):
+                        zeta_l[idx][-1][i] += zeta[i]
+                        all_gate[runnum_l[idx][-1]][i + 2] = zeta_l[idx][-1][i]
+                    print("^", idx, runnum_l[idx][-1], typee, zeta_l[idx][-1])
+                else:
+                    remove(idx)
+            if typee == 4:
+                if len(entang_l[entang_l[idx][-1]]) > 0 and idx_en == entang_l[idx][-1] and idx == entang_l[entang_l[idx][-1]][-1]:
+                    remove(idx)
+                    remove(entang_l[idx][-1])
+                else:
+                    add(typee, idx, zeta, idx_en)
+                    add(5, idx_en, [0, 0, 0], idx)
+        else:
+            add(typee, idx, zeta, idx_en)
+            if typee == 4:
+                add(5, idx_en, [0, 0, 0], idx)
+
+            # print(idx)
+    def push_pauli_string(strr, coeff):
+        for i, p in enumerate(strr):
+            if p == "X":
+                push(3, i)
+            elif p == "Y":
+                push(0, i, [pi/2, 0, 0])
+                # push(3, i)
+        ll = -1
+        for i, p in enumerate(strr):
+            if p in ["X", "Y", "Z"]:
+                if ll != -1:
+                    push(4, ll, idx_en=i)
+                    # push(5, i, idx_en=ll)
+                ll = i
+        push(2, ll, [0, 0, -2 * coeff])
+        ll = -1
+        for i, p in reversed(list(enumerate(strr))):
+            if p in ["X", "Y", "Z"]:
+                if ll != -1:
+                    push(4, i, idx_en=ll)
+                    # push(5, ll, idx_en=i)
+                ll = i
+        for i, p in enumerate(strr):
+            if p == "X":
+                push(3, i)
+            elif p == "Y":
+                # push(3, i)
+                push(0, i, [-pi/2, 0, 0])
+    
+    for j in range(len(idx_1)):
+        push(2, idx_1[j], [0, 2 * coeff_1[j], 0])
+    for j in range(len(idx_2_a)):
+        push(4, idx_2_a[j], idx_en=idx_2_b[j])
+        # push(5, idx_2_b[j], idx_en=idx_2_a[j])
+        push(2, idx_2_b[j], [0, 2 * coeff_2[j], 0])
+        push(4, idx_2_a[j], idx_en=idx_2_b[j])
+        # push(5, idx_2_b[j], idx_en=idx_2_a[j])
+    for j in range(len(mixer_str)):
+        push_pauli_string(mixer_str[j], mixer_coeff[j])
+
+    # print(all_gate[6])
+    return [nplize(i) for i in[type_l, zeta_l, entang_l, runnum_l]] + nplize([all_gate, mk])
 
 optimizer_names = ["Nelder-Mead", "COBYLA", "SPSA", "Adam", "GradientDescent"]
 def get_optimizer(idx):

@@ -15,7 +15,7 @@ import argparse
 sys.path.append(os.path.abspath(".."))
 from Utils.qaoaCUDAQ import po_normalize, ret_cov_to_QUBO, qubo_to_ising, process_ansatz_values, state_to_return, pauli_to_int, int_to_pauli,\
     basis_T_to_pauli, reversed_str_bases_to_init_state, kernel_qaoa_Preserved, kernel_qaoa_X, kernel_flipped, get_optimizer, find_budget,\
-    all_state_to_return, get_init_states, write_df, clip_df
+    all_state_to_return, get_init_states, write_df, clip_df, kernel_cmpz_Preserved, prepare_preserving_ansatz
 
 import seaborn as sns   
 from copulas.multivariate import GaussianMultivariate
@@ -238,12 +238,17 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 cov += cov.T
                 q = 0 # Volatility Weight
                 B = find_budget(TARGET_QUBIT, P, min_P, max_P)
-                # print(B)
                 # break
                 # B = 270
                 P_bb, ret_bb, cov_bb, n_qubit, n_max, C = po_normalize(B, P, ret, cov)
                 state_return, in_budget = all_state_to_return(B, C, ret, P, over_budget_bound)
                 init_state = get_init_states(state_return, in_budget, num_init_bases, n_qubit)
+
+                # print(P)
+                # print(ret)
+                # print(B)
+                # print(init_state)
+                # exit()
 
                 feasible_state_return = state_return * in_budget
                 max_return = state_return[int(init_state[0], 2)]
@@ -266,6 +271,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
 
                     kernel_qaoa_use = kernel_qaoa_X if mode == "X" else kernel_qaoa_Preserved
+                    # kernel_qaoa_use = kernel_qaoa_X if mode == "X" else kernel_cmpz_Preserved
 
                     idx = 3
                     layer_count = LAYER
@@ -288,7 +294,17 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                         # print(T)
                         mixer_s, mixer_c = basis_T_to_pauli(init_state, T, n_qubit)
                         init_bases = reversed_str_bases_to_init_state(init_state, n_qubit)
+
                         ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c, init_bases)
+
+                        # preserving_gates = prepare_preserving_ansatz(n_qubit, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c.tolist())
+                        # ansatz_fixed_param = (int(n_qubit), layer_count, preserving_gates, init_bases)
+
+                        # preserving_gates, mk = prepare_preserving_ansatz(n_qubit, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c.tolist())[-2:]
+                        # preserving_gates = preserving_gates[mk == 1].reshape(-1)
+                        # ansatz_fixed_param = (int(n_qubit), layer_count, preserving_gates, init_bases)
+
+
                         init_2_time = time.time() - st
                         # print(f"Init for {mode}: {init_2_time*1000:.2f} ms.")
                     # print(cudaq.draw(kernel_qaoa_use, [0.5]*4, *ansatz_fixed_param[:1], 1, *ansatz_fixed_param[2:]))
