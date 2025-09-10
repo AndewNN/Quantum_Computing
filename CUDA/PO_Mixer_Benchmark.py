@@ -25,7 +25,7 @@ import pickle
 import time
 # cudaq.mpi.initialize()
 # cudaq.set_target("nvidia")
-cudaq.set_target("nvidia", option="mqpu")
+cudaq.set_target("nvidia")
 pd.set_option('display.width', 1000)
 np.random.seed(50)
 state = np.random.get_state()
@@ -300,10 +300,10 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     # expectations3 = []
                     def cost_func(parameters, cal_expectation=False):
                         # return cudaq.observe(kernel_qaoa, H, n_qubit, layer_count, parameters, 0).expectation()
-                        exp_return = cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation()
+                        exp_return = float(cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation())
                         if cal_expectation:
-                            exp_return_in = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation()
-                            expectations.append([float(exp_return_in), float(exp_return)])
+                            exp_return_in = float(cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation())
+                            expectations.append([exp_return_in, exp_return])
                         return exp_return
                         #     exp_return = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param, execution=cudaq.parallel.thread).expectation()
                         #     expectations.append(exp_return)
@@ -314,11 +314,12 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                         # expectations3.append(expectation)
                         return expectation
 
+                    fd = cudaq.gradients.ForwardDifference()
                     def objective_grad_cuda(parameters):
                         expectation = cost_func(parameters, cal_expectation=True)
                         # expectations3.append(expectation)
 
-                        gradient = cudaq.gradients.ForwardDifference().compute(parameters, cost_func, expectation)
+                        gradient = fd.compute(parameters, cost_func, expectation)
 
                         return expectation, gradient
 
