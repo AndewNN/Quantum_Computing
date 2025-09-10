@@ -100,6 +100,13 @@ def parse_args():
         help="Number of iterations (int)"
     )
 
+    # modes (list of str)
+    parser.add_argument(
+        "-m", "--mode",
+        nargs="+", type=str, default=modes,
+        help="List of modes, e.g. -m X Preserving"
+    )
+
     return parser.parse_args()
 
 args = parse_args()
@@ -116,6 +123,7 @@ LAYER = args.layer
 num_init_bases_in = args.bases
 iter_start = args.start_iter
 iter_end = args.end_iter
+modes = args.mode
 
 # print(TARGET_QUBIT_IN)
 # print(N_ASSETS_IN, type(N_ASSETS_IN))
