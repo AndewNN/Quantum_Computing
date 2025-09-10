@@ -300,9 +300,9 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     # expectations3 = []
                     def cost_func(parameters, cal_expectation=False):
                         # return cudaq.observe(kernel_qaoa, H, n_qubit, layer_count, parameters, 0).expectation()
+                        exp_return = cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation()
                         if cal_expectation:
                             exp_return_in = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation()
-                            exp_return = cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation()
                             expectations.append([exp_return_in, exp_return])
                         return exp_return
                         #     exp_return = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param, execution=cudaq.parallel.thread).expectation()
