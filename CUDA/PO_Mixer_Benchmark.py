@@ -192,7 +192,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
 
             np.random.set_state(state_init_loop)
             restore_iter = iter_start
-            if os.path.exists(f"{dir_path}/X.csv") and os.path.exists(f"{dir_path}/Preserving.csv"):
+            if os.path.exists(f"{dir_path}/X.csv") or os.path.exists(f"{dir_path}/Preserving.csv"):
                 for mode in modes:
                     df = pd.read_csv(f"./{dir_path}/{mode}.csv")
                     if restore_iter > iter_start:
