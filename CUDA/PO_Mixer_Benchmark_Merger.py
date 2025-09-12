@@ -5,6 +5,8 @@ import pandas as pd
 import shutil
 
 LOOP = 100
+modes = ["X", "Preserving"]
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Experiment parameter sweep")
@@ -51,6 +53,13 @@ def parse_args():
         help="Number of iterations (int)"
     )
 
+    # modes (list of str)
+    parser.add_argument(
+        "-m", "--mode",
+        nargs="+", type=str, default=modes,
+        help="List of modes, e.g. -m X Preserving"
+    )
+
     return parser.parse_args()
 
 args = parse_args()
@@ -60,7 +69,7 @@ LAMB = args.lamb # Budget Penalty
 Q = args.q # Volatility Weight
 num_init_bases_in = args.bases
 LOOP = args.end_iter
-modes = ["X", "Preserving"]
+modes = args.mode
 
 def find_dir_start_with(str):
     base_path = "./experiments"
