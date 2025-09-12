@@ -41,6 +41,12 @@ over_budget_bound = 1.0 # valid budget in [0, B * over_budget_bound]
 min_P, max_P = 125, 250
 hamiltonian_boost = 2000
 
+def file_copy(src, dst):
+    try:
+        shutil.copyfile(src, dst)
+    except shutil.SameFileError:
+        pass
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Experiment parameter sweep")
 
@@ -170,7 +176,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             if TARGET_QUBIT < N_ASSETS:
                 continue
 
-            print(f"Target Qubit: {TARGET_QUBIT}, N Assets: {N_ASSETS}, Num Init Bases: {num_init_bases}")
+            print(f"Target Qubit: {TARGET_QUBIT}, N Assets: {N_ASSETS}, Num Init Bases: {num_init_bases}, ST: {iter_start}, ED: {iter_end}, Modes: {modes}")
             # continue
             dir_name = f"exp_Q{TARGET_QUBIT}_A{N_ASSETS}_L{LAMB}_q{Q}_B{num_init_bases}"
             if iter_start != 0 or iter_end != LOOP:
@@ -191,14 +197,16 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             # continue
 
             np.random.set_state(state_init_loop)
-            restore_iter = iter_start
+            restore_iter, tmpp = iter_start, int(1e9)
             if os.path.exists(f"{dir_path}/X.csv") or os.path.exists(f"{dir_path}/Preserving.csv"):
                 for mode in modes:
                     df = pd.read_csv(f"./{dir_path}/{mode}.csv")
-                    if restore_iter > iter_start:
-                        restore_iter = min(restore_iter, df.shape[0] + iter_start)
-                    else:
-                        restore_iter = df.shape[0] + iter_start
+                    # if restore_iter > iter_start:
+                    #     restore_iter = min(restore_iter, df.shape[0] + iter_start)
+                    # else:
+                    #     restore_iter = df.shape[0] + iter_start
+                    tmpp = min(tmpp, df.shape[0] + iter_start)
+                restore_iter = max(restore_iter, tmpp) # I don't know what on earth will trigger this max but this is safer YK what I mean
 
                 for mode in modes:
                     df = pd.read_csv(f"./{dir_path}/{mode}.csv")
@@ -215,14 +223,14 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
 
             X_exist = False
-            if os.path.exists(f"{dir_path_Xbase}/result.csv"):
-                shutil.copyfile(f"{dir_path_Xbase}/X.csv", f"{dir_path}/X.csv")
+            if os.path.exists(f"{dir_path_Xbase}/X.csv") and pd.read_csv(f"{dir_path_Xbase}/X.csv").shape[0] >= iter_end:
+                file_copy(f"{dir_path_Xbase}/X.csv", f"{dir_path}/X.csv")
                 x_csv = pd.read_csv(f"{dir_path}/X.csv")
                 x_csv = x_csv.iloc[iter_start:iter_end]
                 x_csv.to_csv(f"{dir_path}/X.csv", index=False)
                 # shutil.copytree(f"{dir_path_Xbase}/expectations_X", f"{dir_path}/expectations_X", dirs_exist_ok=True)
                 for f_i in range(iter_start, iter_end):
-                    shutil.copyfile(f"{dir_path_Xbase}/expectations_X/expectations_{f_i}.npy", f"{dir_path}/expectations_X/expectations_{f_i}.npy")
+                    file_copy(f"{dir_path_Xbase}/expectations_X/expectations_{f_i}.npy", f"{dir_path}/expectations_X/expectations_{f_i}.npy")
                 X_exist = True
 
             pbar = tqdm(range(restore_iter, iter_end))
