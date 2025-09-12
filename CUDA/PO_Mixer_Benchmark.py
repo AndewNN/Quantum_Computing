@@ -373,34 +373,35 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                                 approx_ratio, maxprob_ratio, init_1_time, init_2_time, optim_time, observe_time)
                     # gc.collect()
 
-            df_X = pd.read_csv(f"{dir_path}/X.csv")
-            df_P = pd.read_csv(f"{dir_path}/Preserving.csv")
+            if "X" in modes and "Preserving" in modes:
+                df_X = pd.read_csv(f"{dir_path}/X.csv")
+                df_P = pd.read_csv(f"{dir_path}/Preserving.csv")
 
-            approx_X = df_X["Approximate_ratio"].mean()
-            approx_P = df_P["Approximate_ratio"].mean()
-            print(f"Approximate ratio for X: {approx_X:.4f}, Preserving: {approx_P:.4f}")
+                approx_X = df_X["Approximate_ratio"].mean()
+                approx_P = df_P["Approximate_ratio"].mean()
+                print(f"Approximate ratio for X: {approx_X:.4f}, Preserving: {approx_P:.4f}")
 
-            maxprob_X = df_X["MaxProb_ratio"].mean()
-            maxprob_P = df_P["MaxProb_ratio"].mean()
-            print(f"MaxProb ratio for X: {maxprob_X:.4f}, Preserving: {maxprob_P:.4f}")
+                maxprob_X = df_X["MaxProb_ratio"].mean()
+                maxprob_P = df_P["MaxProb_ratio"].mean()
+                print(f"MaxProb ratio for X: {maxprob_X:.4f}, Preserving: {maxprob_P:.4f}")
 
-            init_1_time_X = df_X["init_1_time"].mean()
-            init_2_time_X = df_X["init_2_time"].mean()
-            optim_time_X = df_X["optim_time"].mean()
-            observe_time_X = df_X["observe_time"].mean()
+                init_1_time_X = df_X["init_1_time"].mean()
+                init_2_time_X = df_X["init_2_time"].mean()
+                optim_time_X = df_X["optim_time"].mean()
+                observe_time_X = df_X["observe_time"].mean()
 
-            init_1_time_P = df_P["init_1_time"].mean()
-            init_2_time_P = df_P["init_2_time"].mean()
-            optim_time_P = df_P["optim_time"].mean()
-            observe_time_P = df_P["observe_time"].mean()
+                init_1_time_P = df_P["init_1_time"].mean()
+                init_2_time_P = df_P["init_2_time"].mean()
+                optim_time_P = df_P["optim_time"].mean()
+                observe_time_P = df_P["observe_time"].mean()
 
-            print(f"Init 1 time for X: {init_1_time_X*1000:.2f} ms, Preserving: {init_1_time_P*1000:.2f} ms")
-            print(f"Init 2 time for X: {init_2_time_X*1000:.2f} ms, Preserving: {init_2_time_P*1000:.2f} ms")
-            print(f"Optim time for X: {optim_time_X*1000:.2f} ms, Preserving: {optim_time_P*1000:.2f} ms")
-            print(f"Observe time for X: {observe_time_X*1000:.2f} ms, Preserving: {observe_time_P*1000:.2f} ms")
+                print(f"Init 1 time for X: {init_1_time_X*1000:.2f} ms, Preserving: {init_1_time_P*1000:.2f} ms")
+                print(f"Init 2 time for X: {init_2_time_X*1000:.2f} ms, Preserving: {init_2_time_P*1000:.2f} ms")
+                print(f"Optim time for X: {optim_time_X*1000:.2f} ms, Preserving: {optim_time_P*1000:.2f} ms")
+                print(f"Observe time for X: {observe_time_X*1000:.2f} ms, Preserving: {observe_time_P*1000:.2f} ms")
 
-            col_result = ["Mode"] + report_col
-            df_result = pd.DataFrame(columns=col_result)
-            df_result.loc[0] = ["X", approx_X, maxprob_X, init_1_time_X, init_2_time_X, optim_time_X, observe_time_X]
-            df_result.loc[1] = ["Preserving", approx_P, maxprob_P, init_1_time_P, init_2_time_P, optim_time_P, observe_time_P]
-            df_result.to_csv(f"{dir_path}/result.csv", index=False)
+                col_result = ["Mode"] + report_col
+                df_result = pd.DataFrame(columns=col_result)
+                df_result.loc[0] = ["X", approx_X, maxprob_X, init_1_time_X, init_2_time_X, optim_time_X, observe_time_X]
+                df_result.loc[1] = ["Preserving", approx_P, maxprob_P, init_1_time_P, init_2_time_P, optim_time_P, observe_time_P]
+                df_result.to_csv(f"{dir_path}/result.csv", index=False)
