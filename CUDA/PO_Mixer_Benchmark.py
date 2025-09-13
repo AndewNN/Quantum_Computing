@@ -169,6 +169,7 @@ assert samples.shape[0] > max(N_ASSETS_IN) * LOOP, "Please increase the oversamp
 np.random.set_state(state)
 state_init_loop = np.random.get_state()
 ch_tr = True
+in_min, in_max = int(1e9), -int(1e9)
 for TARGET_QUBIT in TARGET_QUBIT_IN:
     for N_ASSETS in N_ASSETS_IN:
         for num_init_bases in num_init_bases_in:
@@ -200,24 +201,24 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             restore_iter, tmpp = iter_start, int(1e9)
             if os.path.exists(f"{dir_path}/X.csv") or os.path.exists(f"{dir_path}/Preserving.csv"):
                 for mode in modes:
-                    df = pd.read_csv(f"./{dir_path}/{mode}.csv")
-                    # if restore_iter > iter_start:
-                    #     restore_iter = min(restore_iter, df.shape[0] + iter_start)
-                    # else:
-                    #     restore_iter = df.shape[0] + iter_start
-                    tmpp = min(tmpp, df.shape[0] + iter_start)
+                    if os.path.exists(f"{dir_path}/{mode}.csv"):
+                        df = pd.read_csv(f"./{dir_path}/{mode}.csv")
+                        tmpp = min(tmpp, df.shape[0] + iter_start)
+                    else:
+                        tmpp = iter_start
                 restore_iter = max(restore_iter, tmpp) # I don't know what on earth will trigger this max but this is safer YK what I mean
 
                 for mode in modes:
+                    if not os.path.exists(f"{dir_path}/{mode}.csv"):
+                        continue
                     df = pd.read_csv(f"./{dir_path}/{mode}.csv")
                     df = clip_df(df, restore_iter - iter_start)
                     df.to_csv(f"{dir_path}/{mode}.csv", index=False)
-
             else:
                 for curr_dir, dirs, files in os.walk(dir_path):
                     for file in files:
                         os.remove(os.path.join(curr_dir, file))
-
+                        
             for i in range(restore_iter):
                 np.random.rand(N_ASSETS, N_ASSETS)
                 np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
@@ -265,6 +266,10 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 # print(B)
                 # print(init_state)
                 # exit()
+
+                # print(in_budget.sum())
+                in_min, in_max = min(in_min, in_budget.sum()), max(in_max, in_budget.sum())
+                # continue
 
                 feasible_state_return = state_return * in_budget
                 max_return = state_return[int(init_state[0], 2)]
@@ -380,7 +385,12 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     write_df(f"{dir_path}/{mode}.csv", report_col,
                                 approx_ratio, maxprob_ratio, init_1_time, init_2_time, optim_time, observe_time)
                     # gc.collect()
-
+            print(f"Min:Max feasible states: {in_min}:{in_max}")
+            if in_min < num_init_bases:
+                with open(f"{dir_path}/flag.txt", "w") as f:
+                    f.write(f"Min feasible states {in_min} < num_init_bases {num_init_bases}\n")
+                    f.write(f"(Max feasible states {in_max})\n")
+                    f.close()
             if "X" in modes and "Preserving" in modes:
                 df_X = pd.read_csv(f"{dir_path}/X.csv")
                 df_P = pd.read_csv(f"{dir_path}/Preserving.csv")
