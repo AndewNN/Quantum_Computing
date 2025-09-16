@@ -245,6 +245,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 # ret = np.array([0.00107, 0.00083, 0.00071])
                 cov = np.random.rand(N_ASSETS, N_ASSETS)
                 cov += cov.T
+                # print(cov)
                 q = Q # Volatility Weight
                 B = find_budget(TARGET_QUBIT, P, min_P, max_P)
                 # break

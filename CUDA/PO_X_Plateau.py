@@ -154,9 +154,10 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             ret = samples[i * N_ASSETS:(i + 1) * N_ASSETS, 1]
             np.random.set_state(loop_state)
             cov = np.random.rand(N_ASSETS, N_ASSETS)
+            cov += cov.T
+            # print(cov)
             loop_state = np.random.get_state()
 
-            cov += cov.T
             q = Q # Volatility Weight
             B = find_budget(TARGET_QUBIT, P, min_P, max_P)
 
@@ -181,6 +182,8 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             df_now = pd.read_csv(f"{dir_path}/report.csv") if os.path.exists(f"{dir_path}/report.csv") else None
             if df_now is not None and df_now.shape[0] > i:
                 if df_now.iloc[i]['N'] >= N:
+                    np.random.uniform(-np.pi / 8, np.pi / 8, 4 * LAYER)
+                    loop_state = np.random.get_state()
                     continue
                 it_st, sum_1, sum_2 = df_now.iloc[i]
                 it_st = int(it_st)
