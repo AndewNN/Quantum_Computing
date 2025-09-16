@@ -559,11 +559,18 @@ def get_init_states(state_return, in_budget, num_init_bases, n_qubits):
             break
     return init_states
 
-def write_df(df_dir, report_col, *data):
-    df_new = pd.DataFrame(np.array(data).reshape(1, -1), columns=report_col)
-    m_df = os.path.exists(df_dir)
-    # print(df_dir)
-    df_new.to_csv(df_dir, mode='a' if m_df else 'w', header=(not m_df), index=False)
+def write_df(df_dir, report_col, *data, idx=None):
+    if idx is None or idx is not None and ((idx == 0 and not os.path.exists(df_dir)) or (os.path.exists(df_dir) and pd.read_csv(df_dir).shape[0] == idx)):
+        df_new = pd.DataFrame(np.array(data).reshape(1, -1), columns=report_col)
+        m_df = os.path.exists(df_dir)
+        # print(df_dir)
+        df_new.to_csv(df_dir, mode='a' if m_df else 'w', header=(not m_df), index=False)
+    else:
+        assert os.path.exists(df_dir), f"CSV file does not exist. (write idx: {idx})"
+        df = pd.read_csv(df_dir)
+        assert df.shape[0] > idx, f"df shape: {df.shape}, writing idx: {idx}"
+        df.iloc[idx] = np.array(data).reshape(1, -1)
+        df.to_csv(df_dir, index=False)
 
 def clip_df(df, restore_iter):
     assert restore_iter <= len(df), "restore_iter exceeds the number of iterations in the CSV file."
