@@ -1,11 +1,6 @@
 import numpy as np
 import pandas as pd
 import cudaq
-from cudaq import spin
-from typing import List, Tuple
-import matplotlib.pyplot as plt
-from math import sqrt
-import math
 import sys
 import os
 import torch
@@ -13,16 +8,13 @@ from tqdm import tqdm
 import shutil
 import argparse
 sys.path.append(os.path.abspath(".."))
-from Utils.qaoaCUDAQ import po_normalize, ret_cov_to_QUBO, qubo_to_ising, process_ansatz_values, state_to_return, pauli_to_int, int_to_pauli,\
+from Utils.qaoaCUDAQ import po_normalize, ret_cov_to_QUBO, qubo_to_ising, process_ansatz_values,\
     basis_T_to_pauli, reversed_str_bases_to_init_state, kernel_qaoa_Preserved, kernel_qaoa_X, kernel_flipped, get_optimizer, find_budget,\
-    all_state_to_return, get_init_states, write_df, clip_df, kernel_cmpz_Preserved, prepare_preserving_ansatz
+    all_state_to_return, get_init_states, write_df, clip_df
 
-import seaborn as sns   
-from copulas.multivariate import GaussianMultivariate
 import joblib
-import pickle
-
 import time
+
 # cudaq.mpi.initialize()
 # cudaq.set_target("nvidia")
 cudaq.set_target("nvidia")
@@ -253,7 +245,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 # ret = np.array([0.00107, 0.00083, 0.00071])
                 cov = np.random.rand(N_ASSETS, N_ASSETS)
                 cov += cov.T
-                q = 0 # Volatility Weight
+                q = Q # Volatility Weight
                 B = find_budget(TARGET_QUBIT, P, min_P, max_P)
                 # break
                 # B = 270
