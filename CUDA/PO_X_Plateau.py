@@ -140,18 +140,19 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
         os.makedirs(dir_path, exist_ok=True)
 
         np.random.set_state(state_init_loop)
+        loop_state = np.random.get_state()
         restore_iter = iter_start
-        sum_1, sum_2 = 0.0, 0.0
         
         for i in range(restore_iter):
             np.random.rand(N_ASSETS, N_ASSETS)
             np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
         
         pbar = tqdm(range(restore_iter, iter_end))
-        loop_state = None
         for i in pbar:
+            pbar.set_description(f"X:init_1")
             P = samples[i * N_ASSETS:(i + 1) * N_ASSETS, 0]
             ret = samples[i * N_ASSETS:(i + 1) * N_ASSETS, 1]
+            np.random.set_state(loop_state)
             cov = np.random.rand(N_ASSETS, N_ASSETS)
             loop_state = np.random.get_state()
 
@@ -176,11 +177,21 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             layer_count = LAYER
             parameter_count = layer_count * 2
             ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
+            it_st, sum_1, sum_2 = 0, 0.0, 0.0
+            df_now = pd.read_csv(f"{dir_path}/report.csv") if os.path.exists(f"{dir_path}/report.csv") else None
+            if df_now is not None and df_now.shape[0] > i:
+                if df_now.iloc[i]['N'] >= N:
+                    continue
+                it_st, sum_1, sum_2 = df_now.iloc[i]
+                it_st = int(it_st)
             
-            points = np.random.uniform(-np.pi, np.pi, (iter_end, parameter_count))
+            np.random.set_state(rand_state)
+            points = np.random.uniform(-np.pi, np.pi, (N, parameter_count))
 
             expectations = []
-            for ii in range(N):
+
+            pbar.set_description(f"X:observing")
+            for ii in tqdm(range(it_st, N), leave=False):
                 expectations.append(float(cudaq.observe(kernel_qaoa_use, H, points[ii], *ansatz_fixed_param).expectation()))
             expectations = np.array(expectations)
             sum_1 += expectations.sum()
@@ -188,8 +199,9 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
 
             # dff = pd.DataFrame(np.array([iter_end, sum_1, sum_2]).reshape(1, -1), columns=report_col)
             # dff.to_csv(f"{dir_path}/report.csv", index=False)
-            write_df(f"{dir_path}/report.csv", N, sum_1, sum_2, report_col, idx=i)
+            write_df(f"{dir_path}/report.csv", report_col, N, sum_1, sum_2, idx=i)
 
 
-
+            np.random.set_state(loop_state)
             np.random.uniform(-np.pi / 8, np.pi / 8, 4 * LAYER) # Reserved for params of X and Preserving hamiltonian
+            loop_state = np.random.get_state()
