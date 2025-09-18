@@ -5,3 +5,4 @@ Reports/
 *.pyc
 *.npy
 CUDA/experiments*
+CUDA/results*
