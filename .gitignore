@@ -4,5 +4,7 @@ CUDA/output_PO/*
 Reports/
 *.pyc
 *.npy
+*.cbin
+.vscode/
 CUDA/experiments*
 CUDA/results*
