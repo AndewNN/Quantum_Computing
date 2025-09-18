@@ -31,7 +31,8 @@ LOOP = 100
 oversample_factor = 5
 over_budget_bound = 1.0 # valid budget in [0, B * over_budget_bound]
 min_P, max_P = 125, 250
-hamiltonian_boost = 2000
+hamiltonian_X_boost = 1
+hamiltonian_P_boost = 2000
 
 def file_copy(src, dst):
     try:
@@ -105,6 +106,20 @@ def parse_args():
         help="List of modes, e.g. -m X Preserving"
     )
 
+    # X mixer Hamiltonian boost
+    parser.add_argument(
+        "-hx", "--hamiltonian_x_boost",
+        type=float, default=hamiltonian_X_boost,
+        help="Hamiltonian boost for X mixer (float)"
+    )
+
+    # Preserving mixer Hamiltonian boost
+    parser.add_argument(
+        "-hp", "--hamiltonian_p_boost",
+        type=float, default=hamiltonian_P_boost,
+        help="Hamiltonian boost for Preserving mixer (float)"
+    )
+
     return parser.parse_args()
 
 args = parse_args()
@@ -122,6 +137,8 @@ num_init_bases_in = args.bases
 iter_start = args.start_iter
 iter_end = args.end_iter
 modes = args.mode
+hamiltonian_X_boost = args.hamiltonian_x_boost
+hamiltonian_P_boost = args.hamiltonian_p_boost
 
 # print(TARGET_QUBIT_IN)
 # print(N_ASSETS_IN, type(N_ASSETS_IN))
@@ -279,7 +296,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     lamb = LAMB if mode == "X" else 0 # Budget Penalty
 
                     QU = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
-                    H = qubo_to_ising(QU, lamb).canonicalize() * (1 if mode == "X" else hamiltonian_boost)
+                    H = qubo_to_ising(QU, lamb).canonicalize() * (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
                     QU_0 = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, 0, q)
                     H_0 = qubo_to_ising(QU_0, 0).canonicalize()
                     idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
