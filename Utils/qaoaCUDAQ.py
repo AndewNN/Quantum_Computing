@@ -138,6 +138,7 @@ def hamiltonian_max_cut(edges_src: List[int], edges_tgt: List[int],
 
 
 def po_normalize(B, P, ret, cov):
+    # print("cp 0")
     P_b = P / B
     ret_b = ret * P_b
     cov_b = np.diag(P_b) @ cov @ np.diag(P_b)
@@ -148,9 +149,11 @@ def po_normalize(B, P, ret, cov):
     n_qs = np.insert(n_qs, 0, 0)
     n_qubit = n_qs[-1]
     C = np.zeros((len(P), n_qubit))
+    # print("cp 1")
     for i in range(len(P)):
          for j in range(n_max[i]):
               C[i, n_qs[i] + j] = 2**j
+    # print("cp 2")
 
     P_bb = C.T @ P_b
     ret_bb = C.T @ ret_b
@@ -271,14 +274,17 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
         return A, B
         
     A_all, B_all = 0, 0
+    print("in pauli")
     for i in range(T.shape[0]):
         for j in range(i + 1, T.shape[1]):
             A_now, B_now = get_pauli(bases[i], bases[j])
             A_all += T[i, j] * A_now
             B_all += T[i, j] * B_now
+    print("out pauli")
     
     ret_s, ret_c = [], []
 
+    print("in iter")
     for i in A_all:
         s = i.get_pauli_word(n_qubits)
         c = i.evaluate_coefficient()
@@ -287,6 +293,7 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
             ret_s.append(s)
             # print(s)
             ret_c.append(c.real)
+    print("out iter")
     
     return ret_s, np.array(ret_c)
 
@@ -534,14 +541,18 @@ def find_budget(target_qubit, P, min_P, max_P):
     return mid
 
 def all_state_to_return(B, C, d_ret, d_p, over_budget_bound):
+    print("all 0")
     qb = C.shape[1]
     l = np.zeros((1<<qb, qb))
+    print(d_p.shape, C.shape)
     P = d_p @ C
     ret_C = (d_ret * d_p) @ C
+    print("all 1")
     for i in range(1<<qb):
         s = bin(i)[2:].zfill(qb)
         ll = np.array(list(map(int, s)))
         l[i] = ll
+    print("all 2")
     ss = l @ ret_C
     bud = l @ P
     return ss, bud <= B * over_budget_bound

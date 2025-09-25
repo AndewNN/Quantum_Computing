@@ -267,9 +267,13 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 B = find_budget(TARGET_QUBIT, P, min_P, max_P)
                 # break
                 # B = 270
+                print("g 0")
                 P_bb, ret_bb, cov_bb, n_qubit, n_max, C = po_normalize(B, P, ret, cov)
+                print("g 1")
                 state_return, in_budget = all_state_to_return(B, C, ret, P, over_budget_bound)
+                print("g 2")
                 init_state = get_init_states(state_return, in_budget, num_init_bases, n_qubit)
+                print("g 3")
 
                 # print(P)
                 # print(ret)
@@ -295,11 +299,13 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     st = time.time()
                     lamb = LAMB if mode == "X" else 0 # Budget Penalty
 
+                    print("c2 0")
                     QU = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
                     hamiltonian_boost = (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
                     H = qubo_to_ising(QU, lamb).canonicalize() * (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
                     QU_0 = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, 0, q)
                     H_0 = qubo_to_ising(QU_0, 0).canonicalize()
+                    print("c2 1")
                     idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
 
                     kernel_qaoa_use = kernel_qaoa_X if mode == "X" else kernel_qaoa_Preserved
@@ -324,8 +330,11 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                         T[1:, :-1] += np.eye(n_bases - 1, dtype=np.float32)
                         T[0, -1] = T[-1, 0] = 1.0
                         # print(T)
+                        print("c2p 0")
                         mixer_s, mixer_c = basis_T_to_pauli(init_state, T, n_qubit)
+                        print("c2p 1")
                         init_bases = reversed_str_bases_to_init_state(init_state, n_qubit)
+                        print("c2p 2")
 
                         ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c, init_bases)
 

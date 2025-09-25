@@ -5,5 +5,7 @@ Reports/
 *.pyc
 *.npy
 *.zip
+*.cbin
+.vscode/
 CUDA/experiments*
 CUDA/results*
