@@ -135,7 +135,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
         print(f"Target Qubit: {TARGET_QUBIT}, N Assets: {N_ASSETS}, ST: {iter_start}, ED: {iter_end}")
 
         dir_name = f"exp_Q{TARGET_QUBIT}_A{N_ASSETS}_L{LAMB}_q{Q}"
-        dir_path = f"./experiments_plateau/{dir_name}"
+        dir_path = f"./experiments_plateau_X/{dir_name}"
         
         os.makedirs(dir_path, exist_ok=True)
 

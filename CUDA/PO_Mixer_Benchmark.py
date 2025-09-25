@@ -296,6 +296,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     lamb = LAMB if mode == "X" else 0 # Budget Penalty
 
                     QU = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
+                    hamiltonian_boost = (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
                     H = qubo_to_ising(QU, lamb).canonicalize() * (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
                     QU_0 = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, 0, q)
                     H_0 = qubo_to_ising(QU_0, 0).canonicalize()
@@ -347,10 +348,11 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     # expectations3 = []
                     def cost_func(parameters, cal_expectation=False):
                         # return cudaq.observe(kernel_qaoa, H, n_qubit, layer_count, parameters, 0).expectation()
-                        exp_return = float(cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation())
+                        exp_return = float(cudaq.observe(kernel_qaoa_use, H, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
                         if cal_expectation:
-                            exp_return_in = float(cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation())
-                            expectations.append([exp_return_in, exp_return])
+                            # exp_return_in = float(cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param).expectation())
+                            # expectations.append([exp_return_in, exp_return])
+                            pass
                         return exp_return
                         #     exp_return = cudaq.observe(kernel_qaoa_use, H_0, parameters, *ansatz_fixed_param, execution=cudaq.parallel.thread).expectation()
                         #     expectations.append(exp_return)
