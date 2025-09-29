@@ -124,6 +124,13 @@ assert samples.shape[0] > max(N_ASSETS_IN) * LOOP, "Please increase the oversamp
 # samples = samples.to_numpy()
 # plt.show()
 
+
+##########################################################################################
+
+# DO NOT INTERFERE loop_state TO LET EACH SETUP SYNCHRONIZED
+
+##########################################################################################
+
 np.random.set_state(state)
 state_init_loop = np.random.get_state()
 
@@ -171,6 +178,12 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             H = qubo_to_ising(QU, lamb).canonicalize()
             idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
 
+            coeff_1_use, coeff_2_use = np.array(coeff_1_use), np.array(coeff_2_use)
+            mm_1 = np.min(np.abs(coeff_1_use)) if len(coeff_1_use) > 0 else 1e9
+            mm_2 = np.min(np.abs(coeff_2_use)) if len(coeff_2_use) > 0 else 1e9
+            mm = min(mm_1, mm_2)
+            mm_i = np.pi / mm
+
 
             kernel_qaoa_use = kernel_qaoa_X
 
@@ -189,7 +202,10 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 it_st = int(it_st)
             
             np.random.set_state(rand_state)
-            points = np.random.uniform(-np.pi, np.pi, (N, parameter_count))
+            # points = np.random.uniform(-np.pi, np.pi, (N, parameter_count))
+            points = np.zeros((N, parameter_count))
+            points[:, ::2] = np.random.uniform(-mm_i, mm_i, (N, layer_count))
+            points[:, 1::2] = np.random.uniform(-np.pi, np.pi, (N, layer_count))
 
             expectations = []
 
