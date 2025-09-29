@@ -175,6 +175,13 @@ assert samples.shape[0] > max(N_ASSETS_IN) * LOOP, "Please increase the oversamp
 # samples = samples.to_numpy()
 # plt.show()
 
+#####################################################
+# MAX NUM ASSETS = 50 FOR NOW
+#####################################################
+np.random.set_state(state)
+GM_cov = joblib.load('./models/gaussian_copula_covariance.pkl')
+samples
+
 np.random.set_state(state)
 state_init_loop = np.random.get_state()
 ch_tr = True
