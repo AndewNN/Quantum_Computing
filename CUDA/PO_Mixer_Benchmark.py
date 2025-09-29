@@ -23,7 +23,7 @@ np.random.seed(50)
 state = np.random.get_state()
 # with open("rng_state.pkl", "wb") as f:
 #     pickle.dump(state, f)
-modes = ["X", "Preserving"]
+all_modes = ["X", "Preserving"]
 report_col = ["Approximate_ratio", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "observe_time"]
 
 # PIPELINE PARAMETERS
@@ -102,7 +102,7 @@ def parse_args():
     # modes (list of str)
     parser.add_argument(
         "-m", "--mode",
-        nargs="+", type=str, default=modes,
+        nargs="+", type=str, default=all_modes,
         help="List of modes, e.g. -m X Preserving"
     )
 
@@ -262,18 +262,14 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 # ret = np.array([0.00107, 0.00083, 0.00071])
                 cov = np.random.rand(N_ASSETS, N_ASSETS)
                 cov += cov.T
-                # print(cov)
+                print(cov)
                 q = Q # Volatility Weight
                 B = find_budget(TARGET_QUBIT, P, min_P, max_P)
                 # break
                 # B = 270
-                print("g 0")
                 P_bb, ret_bb, cov_bb, n_qubit, n_max, C = po_normalize(B, P, ret, cov)
-                print("g 1")
                 state_return, in_budget = all_state_to_return(B, C, ret, P, over_budget_bound)
-                print("g 2")
                 init_state = get_init_states(state_return, in_budget, num_init_bases, n_qubit)
-                print("g 3")
 
                 # print(P)
                 # print(ret)
@@ -291,7 +287,10 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 init_1_time = time.time() - st
                 # print(f"initial: {init_1_time*1000:.2f} ms.")
 
-                for mode in modes:
+                for mode in all_modes:
+                    if mode not in modes:
+                        np.random.uniform(-np.pi / 8, np.pi / 8, 2 * LAYER)
+                        continue
                     if mode == "X" and X_exist:
                         np.random.uniform(-np.pi / 8, np.pi / 8, 2 * LAYER)
                         continue
@@ -299,13 +298,11 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     st = time.time()
                     lamb = LAMB if mode == "X" else 0 # Budget Penalty
 
-                    print("c2 0")
                     QU = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
                     hamiltonian_boost = (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
                     H = qubo_to_ising(QU, lamb).canonicalize() * (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
                     QU_0 = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, 0, q)
                     H_0 = qubo_to_ising(QU_0, 0).canonicalize()
-                    print("c2 1")
                     idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
 
                     kernel_qaoa_use = kernel_qaoa_X if mode == "X" else kernel_qaoa_Preserved
@@ -317,6 +314,7 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                     optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
                     optimizer.max_iterations = 1000
                     optimizer.initial_parameters = np.random.uniform(-np.pi / 8, np.pi / 8, 2 * LAYER)
+                    
 
                     if mode == "X":
                         ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
@@ -330,11 +328,8 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                         T[1:, :-1] += np.eye(n_bases - 1, dtype=np.float32)
                         T[0, -1] = T[-1, 0] = 1.0
                         # print(T)
-                        print("c2p 0")
                         mixer_s, mixer_c = basis_T_to_pauli(init_state, T, n_qubit)
-                        print("c2p 1")
                         init_bases = reversed_str_bases_to_init_state(init_state, n_qubit)
-                        print("c2p 2")
 
                         ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c, init_bases)
 
