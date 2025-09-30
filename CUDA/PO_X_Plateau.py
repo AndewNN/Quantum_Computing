@@ -55,14 +55,14 @@ def parse_args():
     # Lambda
     parser.add_argument(
         "-L", "--lamb",
-        type=int, default=4,
+        type=float, default=4.0,
         help="Budget Penalty (float)"
     )
 
     # Volatility
     parser.add_argument(
         "-q",
-        type=int, default=0,
+        type=float, default=0.0,
         help="Volatility Weight (float)"
     )
 
@@ -146,9 +146,10 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
         if TARGET_QUBIT < N_ASSETS:
             continue
 
-        print(f"Target Qubit: {TARGET_QUBIT}, N Assets: {N_ASSETS}, ST: {iter_start}, ED: {iter_end}")
-
-        dir_name = f"exp_Q{TARGET_QUBIT}_A{N_ASSETS}_L{LAMB}_q{Q}"
+        print(f"Target Qubit: {TARGET_QUBIT}, N Assets: {N_ASSETS}, L: {LAMB}, q: {Q}, layers: {LAYER}, N: {N}, ST: {iter_start}, ED: {iter_end}")
+        f_Q = Q if not Q.is_integer() else int(Q)
+        f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
+        dir_name = f"exp_Q{TARGET_QUBIT}_A{N_ASSETS}_L{f_LAMB}_q{f_Q}"
         dir_path = f"./experiments_plateau_X/{dir_name}"
         
         os.makedirs(dir_path, exist_ok=True)
