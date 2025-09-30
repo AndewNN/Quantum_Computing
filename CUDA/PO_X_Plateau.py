@@ -125,6 +125,13 @@ assert samples.shape[0] > max(N_ASSETS_IN) * LOOP, "Please increase the oversamp
 # plt.show()
 
 
+np.random.set_state(state)
+GM_cov_loaded = joblib.load('./models/gaussian_copula_covariance.pkl')
+samples_cov = GM_cov_loaded.sample(int(max(N_ASSETS_IN) * LOOP))
+samples_cov = samples_cov.to_numpy()
+samples_cov = np.abs(samples_cov)
+
+
 ##########################################################################################
 
 # DO NOT INTERFERE loop_state TO LET EACH SETUP SYNCHRONIZED
@@ -149,10 +156,12 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
         np.random.set_state(state_init_loop)
         loop_state = np.random.get_state()
         restore_iter = iter_start
-        
+
         for i in range(restore_iter):
             np.random.rand(N_ASSETS, N_ASSETS)
             np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
+        
+        loop_state = np.random.get_state()
         
         pbar = tqdm(range(restore_iter, iter_end))
         for i in pbar:
@@ -160,9 +169,12 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             P = samples[i * N_ASSETS:(i + 1) * N_ASSETS, 0]
             ret = samples[i * N_ASSETS:(i + 1) * N_ASSETS, 1]
             np.random.set_state(loop_state)
-            cov = np.random.rand(N_ASSETS, N_ASSETS)
-            cov += cov.T
-            # print(cov)
+            # cov = np.random.rand(N_ASSETS, N_ASSETS)
+            # cov += cov.T
+            cov = samples_cov[i * N_ASSETS:(i + 1) * N_ASSETS, :N_ASSETS]
+            for j in range(cov.shape[0]):
+                cov[j] = np.roll(cov[j], j)
+            cov = (cov + cov.T) / 2
             loop_state = np.random.get_state()
 
             q = Q # Volatility Weight
@@ -202,10 +214,9 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
                 it_st = int(it_st)
             
             np.random.set_state(rand_state)
-            # points = np.random.uniform(-np.pi, np.pi, (N, parameter_count))
-            points = np.zeros((N, parameter_count))
-            points[:, ::2] = np.random.uniform(-mm_i, mm_i, (N, layer_count))
-            points[:, 1::2] = np.random.uniform(-np.pi, np.pi, (N, layer_count))
+            points = np.random.uniform(-1, 1, (N, parameter_count))
+            points[:, ::2] *= mm_i
+            points[:, 1::2] *= np.pi
 
             expectations = []
 
