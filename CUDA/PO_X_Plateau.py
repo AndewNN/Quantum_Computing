@@ -158,25 +158,25 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
         loop_state = np.random.get_state()
         restore_iter = iter_start
 
-        for i in range(restore_iter):
-            np.random.rand(N_ASSETS, N_ASSETS)
-            np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
+        # for i in range(restore_iter):
+        #     np.random.rand(N_ASSETS, N_ASSETS)
+        #     np.random.uniform(-np.pi / 8, np.pi / 8, LAYER * 4)
         
-        loop_state = np.random.get_state()
+        # loop_state = np.random.get_state()
         
         pbar = tqdm(range(restore_iter, iter_end))
         for i in pbar:
             pbar.set_description(f"X:init_1")
             P = samples[i * N_ASSETS:(i + 1) * N_ASSETS, 0]
             ret = samples[i * N_ASSETS:(i + 1) * N_ASSETS, 1]
-            np.random.set_state(loop_state)
+            # np.random.set_state(loop_state)
             # cov = np.random.rand(N_ASSETS, N_ASSETS)
             # cov += cov.T
             cov = samples_cov[i * N_ASSETS:(i + 1) * N_ASSETS, :N_ASSETS]
             for j in range(cov.shape[0]):
                 cov[j] = np.roll(cov[j], j)
             cov = (cov + cov.T) / 2
-            loop_state = np.random.get_state()
+            # loop_state = np.random.get_state()
 
             q = Q # Volatility Weight
             B = find_budget(TARGET_QUBIT, P, min_P, max_P)
@@ -208,8 +208,8 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             df_now = pd.read_csv(f"{dir_path}/report.csv") if os.path.exists(f"{dir_path}/report.csv") else None
             if df_now is not None and df_now.shape[0] > i:
                 if df_now.iloc[i]['N'] >= N:
-                    np.random.uniform(-np.pi / 8, np.pi / 8, 4 * LAYER)
-                    loop_state = np.random.get_state()
+                    # np.random.uniform(-np.pi / 8, np.pi / 8, 4 * LAYER)
+                    # loop_state = np.random.get_state()
                     continue
                 it_st, sum_1, sum_2 = df_now.iloc[i]
                 it_st = int(it_st)
@@ -233,6 +233,6 @@ for TARGET_QUBIT in TARGET_QUBIT_IN:
             write_df(f"{dir_path}/report.csv", report_col, N, sum_1, sum_2, idx=i)
 
 
-            np.random.set_state(loop_state)
-            np.random.uniform(-np.pi / 8, np.pi / 8, 4 * LAYER) # Reserved for params of X and Preserving hamiltonian
-            loop_state = np.random.get_state()
+            # np.random.set_state(loop_state)
+            # np.random.uniform(-np.pi / 8, np.pi / 8, 4 * LAYER) # Reserved for params of X and Preserving hamiltonian
+            # loop_state = np.random.get_state()
