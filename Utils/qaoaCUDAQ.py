@@ -162,8 +162,8 @@ def po_normalize(B, P, ret, cov):
     return P_bb, ret_bb, cov_bb, int(n_qubit), n_max, C
 
 def ret_cov_to_QUBO(ret: np.ndarray, cov: np.ndarray, P: np.ndarray, lamb: float, q:float) -> np.ndarray:
-    di = np.diag(ret + lamb * (P*P + 2*P))
-    mat = 2 * lamb * np.outer(P, P) + q * cov
+    di = np.diag(ret + 2*lamb*P)
+    mat = lamb * np.outer(P, P) + q * cov
     return di - mat
 
 def qubo_to_ising(qubo: np.ndarray, lamb: float) -> cudaq.SpinOperator:
