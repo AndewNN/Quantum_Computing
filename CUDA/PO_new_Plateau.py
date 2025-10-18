@@ -121,8 +121,8 @@ np.random.set_state(state)
 selected_price = np.random.uniform(125, 250, max(TARGET_ASSET))
 price_factor = selected_price / data_p
 data_p = selected_price
-data_ret = data_ret * price_factor
-data_cov = (price_factor[None, :] * data_cov) * price_factor[:, None]
+# data_ret = data_ret * price_factor
+# data_cov = (price_factor[None, :] * data_cov) * price_factor[:, None]
 
 B = find_budget(TARGET_QUBIT_IN, data_p, min_P, max_P)
 # print("Budget: ", B)
@@ -134,6 +134,7 @@ dir_path = f"./experiments_plateau_X/{dir_name}"
 
 os.makedirs(dir_path, exist_ok=True)
 
+H = None
 pbar = tqdm(enumerate(TARGET_ASSET))
 for i, N_ASSETS in pbar:
     P = data_p[:N_ASSETS]
@@ -149,14 +150,24 @@ for i, N_ASSETS in pbar:
     lamb = LAMB
 
     QU = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
+    if N_ASSETS in [3, 4]:
+        print(QU.shape)
+        print(QU)
+        
+    # if H is None:
     H = qubo_to_ising(QU, lamb).canonicalize()
-    H_1 = cudaq.spin.z(0) * cudaq.spin.z(1)
+    H_1 = cudaq.spin.z(0) * cudaq.spin.z(8)
     # H_2 = cudaq.spin.z(n_qubit//2) * cudaq.spin.z(n_qubit//2 + 1)
     H_2 = cudaq.spin.z(7) * cudaq.spin.z(8)
+    H_2 = cudaq.spin.z(0)
     idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
+    coeff_1_use, coeff_2_use = np.array(coeff_1_use), np.array(coeff_2_use)
     # print(idx_2_a_use, idx_2_b_use)
 
-    coeff_1_use, coeff_2_use = np.array(coeff_1_use), np.array(coeff_2_use)
+    # print(coeff_1_use.__abs__().min(), coeff_1_use.__abs__().max(), coeff_1_use.__abs__().mean())
+    # print(coeff_2_use.__abs__().min(), coeff_2_use.__abs__().max(), coeff_2_use.__abs__().mean())
+    # break
+
     mm_1 = np.min(np.abs(coeff_1_use)) if len(coeff_1_use) > 0 else 1e9
     mm_2 = np.min(np.abs(coeff_2_use)) if len(coeff_2_use) > 0 else 1e9
     mm_i = np.pi / min(mm_1, mm_2)
@@ -189,7 +200,7 @@ for i, N_ASSETS in pbar:
     expectations = []
 
     for ii in tqdm(range(it_st, N), leave=False):
-        expectations.append(float(cudaq.observe(kernel_qaoa_use, H_2, points[ii], *ansatz_fixed_param).expectation()))
+        expectations.append(float(cudaq.observe(kernel_qaoa_use, H_1, points[ii], *ansatz_fixed_param).expectation()))
     expectations = np.array(expectations)
     sum_1 += expectations.sum()
     sum_2 += (expectations ** 2).sum()

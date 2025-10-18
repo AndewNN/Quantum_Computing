@@ -161,7 +161,7 @@ def po_normalize(B, P, ret, cov):
     cov_bb = C.T @ cov_b @ C
     return P_bb, ret_bb, cov_bb, int(n_qubit), n_max, C
 
-def ret_cov_to_QUBO(ret: np.ndarray, cov: np.ndarray, P: np.ndarray, lamb: float, q:float) -> np.ndarray:
+def ret_cov_to_QUBO(ret: np.ndarray, cov: np.ndarray, P: np.ndarray, lamb: float, q:float) -> np.ndarray: # Max return, Min variance
     di = np.diag(ret + 2*lamb*P)
     mat = lamb * np.outer(P, P) + q * cov
     return di - mat
@@ -177,9 +177,7 @@ def qubo_to_ising(qubo: np.ndarray, lamb: float) -> cudaq.SpinOperator:
     return spin_op
 
 def process_ansatz_values(H: cudaq.SpinOperator) -> Tuple[List[int], List[float], List[int], List[int], List[float]]:
-    
     HH = H.get_raw_data()
-
     idxs = [[j - len(HH[0][i])//2 for j in range(len(HH[0][i])) if HH[0][i][j]] for i in range(len(HH[0]))]
 
     HH = [(idxs[i], HH[1][i], sum(HH[0][i])) for i in range(len(HH[0]))]
