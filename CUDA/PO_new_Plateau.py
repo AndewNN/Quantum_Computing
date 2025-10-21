@@ -122,8 +122,9 @@ data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
 
 f_Q = Q if not Q.is_integer() else int(Q)
 f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
-dir_name = f"exp_L{f_LAMB}_q{f_Q}_{'Hall' if Z is None else ('Z' + ''.join([str(z) for z in Z]))}"
+dir_name = f"exp_L{f_LAMB}_q{f_Q}"
 dir_path = f"./experiments_plateau_X/{dir_name}"
+file_name  = f"report_{'Hall' if Z is None else ('Z' + ''.join([str(z) for z in Z]))}.csv"
 
 os.makedirs(dir_path, exist_ok=True)
 
@@ -146,9 +147,6 @@ for e in pbar_all:
         data_p = data_ret_p[:, 1]
 
         # print(data_cov.shape)
-        # print(data_ret.round(5))
-        # print(data_p.round(2))
-        # print(stock_names)
 
         np.random.set_state(state)
         selected_price = np.random.uniform(125, 250, N_ASSETS)
@@ -156,6 +154,10 @@ for e in pbar_all:
         data_p = selected_price
         # data_ret = data_ret * price_factor
         # data_cov = (price_factor[None, :] * data_cov) * price_factor[:, None]
+
+        # print(data_ret.round(5))
+        # print(data_p.round(2))
+        # print(stock_names)
 
         np.random.set_state(state)
         weighted = np.random.uniform(0, 1)
@@ -209,7 +211,7 @@ for e in pbar_all:
         parameter_count = layer_count * 2
         ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
         it_st, sum_1, sum_2 = 0, 0.0, 0.0
-        df_now = pd.read_csv(f"./experiments_plateau_X/{dir_name}/report.csv") if os.path.exists(f"./experiments_plateau_X/{dir_name}/report.csv") else None
+        df_now = pd.read_csv(f"./experiments_plateau_X/{dir_name}/{file_name}") if os.path.exists(f"./experiments_plateau_X/{dir_name}/{file_name}") else None
         # print("\nhere\n")
         if df_now is not None:
             if df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
@@ -223,7 +225,7 @@ for e in pbar_all:
         else:
             df_now = pd.DataFrame(np.array([e, N_ASSETS, TARGET_QUBIT, 0, 0.0, 0.0, 0.0, B])[None, :], columns=report_col)
         # np.random.set_state(rand_state)
-        np.random.seed(4001 + 4009 * e)
+        np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS)
         points = np.random.uniform(-1, 1, (N, parameter_count))
         points[:, ::2] *= mm_i
         points[:, 1::2] *= np.pi
@@ -238,5 +240,5 @@ for e in pbar_all:
 
         df_now.sort_values(by=["Exp", "Assets"], inplace=True)
         df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), ["N", "Sum_1", "Sum_2", "Coeff", "Budget"]] = [N, sum_1, sum_2, coeff_2_use[0], B]
-        df_now.to_csv(f"./experiments_plateau_X/{dir_name}/report.csv", index=False)
+        df_now.to_csv(f"./experiments_plateau_X/{dir_name}/{file_name}", index=False)
         
