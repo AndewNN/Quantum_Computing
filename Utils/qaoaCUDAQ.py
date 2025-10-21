@@ -517,9 +517,13 @@ def get_init_states(state_return, in_budget, init_state_ratio, n_qubits):
             break
     return init_states
 
-def find_budget(target_qubit, P, min_P, max_P):
+def find_budget(target_qubit, P, min_P, max_P, min_mix_mode = False):
+    def rdd(a, coeff, order = 7, s = 1e-9):
+        return round(a + coeff * s, order)
+    
     n_assets = len(P)
-    mi, ma = min_P, max_P * ((1 << math.ceil(target_qubit/n_assets))-1)
+    MI, MA = min_P, max_P * ((1 << math.ceil(target_qubit/n_assets))-1)
+    mi, ma = MI, MA
     cou = 0
     mid = (mi + ma)/2
     while (N := np.sum(np.int32(np.floor(np.log2(mid/P))) + 1)) != target_qubit:
@@ -528,11 +532,39 @@ def find_budget(target_qubit, P, min_P, max_P):
         else:
             ma = mid
         # print()
-        mid = (mi + ma)/2
+        mid = rdd((mi + ma)/2, 0, 7)
         cou += 1
         if cou > 100:
             assert False, "Cannot find budget for target qubit uwaaaaa (Should not happen, Please tell trusted adult lol)"
-    return mid
+    MID = mid
+    if not min_mix_mode:
+        return MID
+    
+    mi, ma = MI, MID
+    cou = 0
+    mid = (mi + ma)/2
+    while mid != ma:
+        if np.sum(np.int32(np.floor(np.log2(mid/P))) + 1) < target_qubit:
+            mi = mid
+        else:
+            ma = mid
+        mid = rdd((mi + ma)/2, 1, 7)
+        cou += 1
+    MIN = mid
+
+    mi, ma = MID, MA
+    cou = 0
+    mid = (mi + ma)/2
+    while mid != ma:
+        if np.sum(np.int32(np.floor(np.log2(mid/P))) + 1) > target_qubit:
+            ma = mid
+        else:
+            mi = mid
+        mid = rdd((mi + ma)/2, 1, 7)
+        cou += 1
+    MAX = mid
+
+    return MIN, MAX
 
 def all_state_to_return(B, C, d_ret, d_p, over_budget_bound):
     # print("all 0")
