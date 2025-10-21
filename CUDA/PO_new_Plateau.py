@@ -25,6 +25,7 @@ N = 2000
 TARGET_QUBIT_IN = 21
 TARGET_ASSET = [3, 4, 5, 6, 7]
 min_P, max_P = 125, 250
+Z = None
 
 def file_copy(src, dst):
     try:
@@ -84,6 +85,13 @@ def parse_args():
         help="Number of Samples (int)"
     )
 
+    # Expectation Basis
+    parser.add_argument(
+        "-Z", "--basis",
+        type=int, nargs="+", default=Z,
+        help="Expectation Basis (list of ints) e.g. -Z 0, -Z 0 7"
+    )
+
     return parser.parse_args()
 
 args = parse_args()
@@ -95,6 +103,8 @@ LAMB = args.lamb # Budget Penalty
 Q = args.q # Volatility Weight
 LAYER = args.layer
 N = args.N
+Z = args.basis
+
 
 # Dataset
 data_cov = pd.read_csv("../dataset/top_50_us_stocks_data_20250526_011226_covariance.csv")
@@ -126,10 +136,10 @@ data_p = selected_price
 
 B = find_budget(TARGET_QUBIT_IN, data_p, min_P, max_P)
 # print("Budget: ", B)
-print(f"Experiment: {args.exp}, Max_Qubits: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, N: {N}, Budget: {B}")
+print(f"Experiment: {args.exp}, Max_Qubits: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, N: {N}, Budget: {B}, Basis: {Z}")
 f_Q = Q if not Q.is_integer() else int(Q)
 f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
-dir_name = f"exp_{args.exp}_L{f_LAMB}_q{f_Q}"
+dir_name = f"exp_{args.exp}_L{f_LAMB}_q{f_Q}_{'Hall' if Z is None else ('Z' + ''.join([str(z) for z in Z]))}"
 dir_path = f"./experiments_plateau_X/{dir_name}"
 
 os.makedirs(dir_path, exist_ok=True)
@@ -150,16 +160,21 @@ for i, N_ASSETS in pbar:
     lamb = LAMB
 
     QU = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
-    if N_ASSETS in [3, 4]:
-        print(QU.shape)
-        print(QU)
+    # if N_ASSETS in [3, 4]:
+    #     print(QU.shape)
+    #     print(QU)
         
     # if H is None:
-    H = qubo_to_ising(QU, lamb).canonicalize()
-    H_1 = cudaq.spin.z(0) * cudaq.spin.z(8)
-    # H_2 = cudaq.spin.z(n_qubit//2) * cudaq.spin.z(n_qubit//2 + 1)
-    H_2 = cudaq.spin.z(7) * cudaq.spin.z(8)
-    H_2 = cudaq.spin.z(0)
+    if Z is None:
+        H = qubo_to_ising(QU, lamb).canonicalize()
+    else:
+        H = 1
+        for i in range(len(Z)):
+            H = H * cudaq.spin.z(Z[i])
+    # H_1 = cudaq.spin.z(7) * cudaq.spin.z(8)
+    # # H_2 = cudaq.spin.z(n_qubit//2) * cudaq.spin.z(n_qubit//2 + 1)
+    # H_2 = cudaq.spin.z(7) * cudaq.spin.z(8)
+    # H_2 = cudaq.spin.z(0)
     idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
     coeff_1_use, coeff_2_use = np.array(coeff_1_use), np.array(coeff_2_use)
     # print(idx_2_a_use, idx_2_b_use)
@@ -200,7 +215,7 @@ for i, N_ASSETS in pbar:
     expectations = []
 
     for ii in tqdm(range(it_st, N), leave=False):
-        expectations.append(float(cudaq.observe(kernel_qaoa_use, H_1, points[ii], *ansatz_fixed_param).expectation()))
+        expectations.append(float(cudaq.observe(kernel_qaoa_use, H, points[ii], *ansatz_fixed_param).expectation()))
     expectations = np.array(expectations)
     sum_1 += expectations.sum()
     sum_2 += (expectations ** 2).sum()
