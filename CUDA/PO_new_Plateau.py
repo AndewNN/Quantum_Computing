@@ -183,8 +183,9 @@ for e in pbar_all:
         #     print(QU)
             
         # if H is None:
+        H_ansatz = qubo_to_ising(QU, lamb).canonicalize()
         if Z is None:
-            H = qubo_to_ising(QU, lamb).canonicalize()
+            H = H_ansatz
         else:
             H = 1
             for i in range(len(Z)):
@@ -193,7 +194,7 @@ for e in pbar_all:
         # # H_2 = cudaq.spin.z(n_qubit//2) * cudaq.spin.z(n_qubit//2 + 1)
         # H_2 = cudaq.spin.z(7) * cudaq.spin.z(8)
         # H_2 = cudaq.spin.z(0)
-        idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H)
+        idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H_ansatz)
         coeff_1_use, coeff_2_use = np.array(coeff_1_use), np.array(coeff_2_use)
         # print(idx_2_a_use, idx_2_b_use)
 
