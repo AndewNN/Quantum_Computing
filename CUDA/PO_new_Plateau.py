@@ -81,7 +81,7 @@ def parse_args():
 
     # QAOA Layers
     parser.add_argument(
-        "-l", "--layer",
+        "-p", "--layer",
         type=int, default=5,
         help="Number of QAOA layers (int)"
     )
@@ -122,7 +122,7 @@ data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
 
 f_Q = Q if not Q.is_integer() else int(Q)
 f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
-dir_name = f"exp_L{f_LAMB}_q{f_Q}"
+dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}"
 dir_path = f"./experiments_plateau_X/{dir_name}"
 file_name  = f"report_{'Hall' if Z is None else ('Z' + ''.join([str(z) for z in Z]))}.csv"
 
