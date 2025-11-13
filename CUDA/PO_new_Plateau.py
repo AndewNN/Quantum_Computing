@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 import cudaq
@@ -8,11 +9,8 @@ from tqdm import tqdm
 import shutil
 import argparse
 sys.path.append(os.path.abspath(".."))
-from Utils.qaoaCUDAQ import po_normalize, ret_cov_to_QUBO, qubo_to_ising, process_ansatz_values,\
-    basis_T_to_pauli, reversed_str_bases_to_init_state, kernel_qaoa_Preserved, kernel_qaoa_X, kernel_flipped, get_optimizer, find_budget,\
-    all_state_to_return, get_init_states, write_df, clip_df
-
-import joblib
+from Utils.qaoaCUDAQ import po_normalize, ret_cov_to_QUBO, qubo_to_ising, process_ansatz_values, kernel_qaoa_X, find_budget,\
+    kernel_qaoa_Preserved, all_state_to_return, get_init_states, basis_T_to_pauli, reversed_str_bases_to_init_state
 
 cudaq.set_target("nvidia")
 pd.set_option('display.width', 1000)
@@ -27,6 +25,7 @@ TARGET_QUBIT_IN = 3
 TARGET_ASSET = [3, 4, 5, 6, 7]
 min_P, max_P = 125, 250
 Z = None
+modes = ["X", "Preserving"]
 
 def file_copy(src, dst):
     try:
@@ -34,7 +33,7 @@ def file_copy(src, dst):
     except shutil.SameFileError:
         pass
 
-def parse_args():
+def parse_argss():
     parser = argparse.ArgumentParser(description="Experiment parameter sweep")
 
     # # Experiment tag number (int)
@@ -100,9 +99,23 @@ def parse_args():
         help="Expectation Basis (list of ints) e.g. -Z 0, -Z 0 7"
     )
 
+    # select mode in ["X", "Preserving"]
+    parser.add_argument(
+        "-m", "--mode",
+        type=str, default="X",
+        help="Mode selection in ['X', 'Preserving']"
+    )
+
+    # number of preserving bases
+    parser.add_argument(
+        "-B", "--bases",
+        type=int, default=12,
+        help="Number of preserving bases (int)"
+    )
+
     return parser.parse_args()
 
-args = parse_args()
+args = parse_argss()
 
 # HYPER PARAMETERS
 TARGET_QUBIT_IN = args.qubit
@@ -113,7 +126,10 @@ LAYER = args.layer
 N = args.N
 Z = args.basis
 E = args.exp
+mode = args.mode
+num_init_bases = args.bases
 
+assert mode in modes, f"Mode {mode} not in {modes}"
 
 # Dataset
 data_cov_pd = pd.read_csv("../dataset/top_50_us_stocks_data_20250526_011226_covariance.csv")
@@ -123,15 +139,15 @@ data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
 f_Q = Q if not Q.is_integer() else int(Q)
 f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
 dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}"
-dir_path = f"./experiments_plateau_X/{dir_name}"
+dir_path = f"./experiments_plateau_{mode}{'' if mode == 'X' else str(num_init_bases)}/{dir_name}"
 file_name  = f"report_{'Hall' if Z is None else ('Z' + ''.join([str(z) for z in Z]))}.csv"
 
 os.makedirs(dir_path, exist_ok=True)
 
-print(f"Experiments: {E}, Max_Qubits: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, N: {N}, Basis: {Z}")
+print(f"Experiments: {E}, Max_Qubits: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, N: {N}, Z: {Z}\
+, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}")
 pbar_all = tqdm(range(E))
 for e in pbar_all:
-    H = None
     pbar = tqdm(enumerate(TARGET_ASSET), leave=False)
     for i, N_ASSETS in pbar:
         np.random.seed(911 + 991 * e + 997 * N_ASSETS)
@@ -177,13 +193,13 @@ for e in pbar_all:
         TARGET_QUBIT = n_qubit
         lamb = LAMB
 
-        QU = -ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
+        QU = ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
         # if N_ASSETS in [3, 4]:
         #     print(QU.shape)
         #     print(QU)
             
         # if H is None:
-        H_ansatz = qubo_to_ising(QU, lamb).canonicalize()
+        H_ansatz = -qubo_to_ising(QU, lamb).canonicalize()
         if Z is None:
             H = H_ansatz
         else:
@@ -202,17 +218,36 @@ for e in pbar_all:
         # print(coeff_2_use.__abs__().min(), coeff_2_use.__abs__().max(), coeff_2_use.__abs__().mean())
         # break
 
-        mm_1 = np.min(np.abs(coeff_1_use)) if len(coeff_1_use) > 0 else 1e9
-        mm_2 = np.min(np.abs(coeff_2_use)) if len(coeff_2_use) > 0 else 1e9
-        mm_i = np.pi / min(mm_1, mm_2)
-
-        kernel_qaoa_use = kernel_qaoa_X
+        kernel_qaoa_use = kernel_qaoa_X if mode == "X" else kernel_qaoa_Preserved
         idx = 3
         layer_count = LAYER
         parameter_count = layer_count * 2
-        ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
+        if mode == "X":
+            ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
+        else:
+            state_return = all_state_to_return(n_qubit, lamb, QU)
+            init_state = get_init_states(state_return, num_init_bases, n_qubit)
+            n_bases = len(init_state)
+            # print("n_bases:", n_bases)
+            T = np.zeros((n_bases, n_bases), dtype=np.float32)
+            T[:-1, 1:] += np.eye(n_bases - 1, dtype=np.float32)
+            T[1:, :-1] += np.eye(n_bases - 1, dtype=np.float32)
+            T[0, -1] = T[-1, 0] = 1.0
+            # print(T)
+            mixer_s, mixer_c = basis_T_to_pauli(init_state, T, n_qubit)
+            init_bases = reversed_str_bases_to_init_state(init_state, n_qubit)
+
+            ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c, init_bases)
+
+        mm_1 = np.min(np.abs(coeff_1_use)) if len(coeff_1_use) > 0 else 1e9
+        mm_2 = np.min(np.abs(coeff_2_use)) if len(coeff_2_use) > 0 else 1e9
+        mm_p = 1e9
+        if mode == "Preserving":
+            mm_p = np.min(np.abs(mixer_c)) if len(mixer_c) > 0 else 1e9
+        mm_i = np.pi / min(mm_1, mm_2, mm_p)
+
         it_st, sum_1, sum_2 = 0, 0.0, 0.0
-        df_now = pd.read_csv(f"./experiments_plateau_X/{dir_name}/{file_name}") if os.path.exists(f"./experiments_plateau_X/{dir_name}/{file_name}") else None
+        df_now = pd.read_csv(f"{dir_path}/{file_name}") if os.path.exists(f"{dir_path}/{file_name}") else None
         # print("\nhere\n")
         if df_now is not None:
             if df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
@@ -232,8 +267,8 @@ for e in pbar_all:
         points[:, 1::2] *= np.pi
 
         expectations = []
-
-        for ii in tqdm(range(it_st, N), leave=False):
+        pbar_point = tqdm(range(it_st, N), leave=False)
+        for ii in pbar_point:
             expectations.append(float(cudaq.observe(kernel_qaoa_use, H, points[ii], *ansatz_fixed_param).expectation()))
         expectations = np.array(expectations)
         sum_1 += expectations.sum()
@@ -241,5 +276,4 @@ for e in pbar_all:
 
         df_now.sort_values(by=["Exp", "Assets"], inplace=True)
         df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), ["N", "Sum_1", "Sum_2", "Coeff", "Budget"]] = [N, sum_1, sum_2, coeff_2_use[0], B]
-        df_now.to_csv(f"./experiments_plateau_X/{dir_name}/{file_name}", index=False)
-        
+        df_now.to_csv(f"{dir_path}/{file_name}", index=False)

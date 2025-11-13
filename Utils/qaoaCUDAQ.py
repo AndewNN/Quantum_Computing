@@ -167,7 +167,7 @@ def ret_cov_to_QUBO(ret: np.ndarray, cov: np.ndarray, P: np.ndarray, lamb: float
     return di - mat
 
 def qubo_to_ising(qubo: np.ndarray, lamb: float) -> cudaq.SpinOperator:
-    spin_op = lamb
+    spin_op = -lamb
     for i in range(qubo.shape[0]):
         for j in range(qubo.shape[1]):
                 if i != j and qubo[i, j] != 0:
@@ -202,13 +202,10 @@ def process_ansatz_values(H: cudaq.SpinOperator) -> Tuple[List[int], List[float]
 
     return idx_1, coeff_1, idx_2_a, idx_2_b, coeff_2
 
-def state_to_return(s, B, C, d_ret, d_p):
+def state_to_return(s, QU, lamb):
     l = np.array(list(map(int, s)))
-    P = d_p @ C
-    ret_C = (d_ret * d_p) @ C
-    ss = l @ ret_C
-    bud = l @ P
-    return ss, bud <= B
+    ss = l @ QU @ l.T
+    return ss + lamb
 
 def pauli_to_int(pauli_str: str) -> int:
     value = 0
@@ -491,30 +488,24 @@ def get_optimizer(idx):
     FIND_GRAD = True if optimizer.requires_gradients() else False
     return optimizer, optimizer_name, FIND_GRAD
 
-def all_state_to_return(B, C, d_ret, d_p, over_budget_bound):
-    qb = C.shape[1]
-    l = np.zeros((1<<qb, qb))
-    P = d_p @ C
-    ret_C = (d_ret * d_p) @ C
-    for i in range(1<<qb):
-        s = bin(i)[2:].zfill(qb)
-        ll = np.array(list(map(int, s)))
-        l[i] = ll
-    ss = l @ ret_C
-    bud = l @ P
-    return ss, bud <= B * over_budget_bound
+def all_state_to_return(qb, lam, QUBO): # QUBOI of Max problem
+    # print("all 0")
+    ll = np.zeros((qb, 1<<qb), dtype=np.float32)
+    a_0 = np.zeros(1<<qb, dtype=np.float32)
+    a_1 = np.ones(1<<qb, dtype=np.float32)
+    idxx = np.arange(1<<qb, dtype=np.int32)
+    for i in range(qb):
+        ll[i] = np.where(idxx%(1<<(qb-i))<(1<<(qb-i-1)), a_0,  a_1)
+    l = ll.T.copy()
+    ss = l @ QUBO
+    ss = (ss.reshape(-1, 1, qb) @ l.reshape(-1, qb, 1))
+    return ss.reshape(-1) - lam
 
-def get_init_states(state_return, in_budget, init_state_ratio, n_qubits):
+def get_init_states(state_return, N, n_qubits):
     sorted_idx = np.argsort(-state_return)
-    N = int(len(state_return) * init_state_ratio)
     init_states = []
-    cou = 0
-    for i in sorted_idx:
-        if in_budget[i]:
-            init_states.append(bin(i)[2:].zfill(n_qubits))
-            cou += 1
-        if cou >= N:
-            break
+    for i in sorted_idx[:N]:
+        init_states.append(bin(i)[2:].zfill(n_qubits))
     return init_states
 
 def find_budget(target_qubit, P, min_P, max_P, min_mix_mode = False):
@@ -565,36 +556,6 @@ def find_budget(target_qubit, P, min_P, max_P, min_mix_mode = False):
     MAX = mid
 
     return MIN, MAX
-
-def all_state_to_return(B, C, d_ret, d_p, over_budget_bound):
-    # print("all 0")
-    qb = C.shape[1]
-    l = np.zeros((1<<qb, qb))
-    # print(d_p.shape, C.shape)
-    P = d_p @ C
-    ret_C = (d_ret * d_p) @ C
-    # print("all 1")
-    for i in range(1<<qb):
-        s = bin(i)[2:].zfill(qb)
-        ll = np.array(list(map(int, s)))
-        l[i] = ll
-    # print("all 2")
-    ss = l @ ret_C
-    bud = l @ P
-    return ss, bud <= B * over_budget_bound
-
-def get_init_states(state_return, in_budget, num_init_bases, n_qubits):
-    sorted_idx = np.argsort(-state_return)
-    N = num_init_bases
-    init_states = []
-    cou = 0
-    for i in sorted_idx:
-        if in_budget[i]:
-            init_states.append(bin(i)[2:].zfill(n_qubits))
-            cou += 1
-        if cou >= N:
-            break
-    return init_states
 
 def write_df(df_dir, report_col, *data, idx=None):
     if idx is None or idx is not None and ((idx == 0 and not os.path.exists(df_dir)) or (os.path.exists(df_dir) and pd.read_csv(df_dir).shape[0] == idx)):
