@@ -139,17 +139,31 @@ data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
 f_Q = Q if not Q.is_integer() else int(Q)
 f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
 dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}"
-dir_path = f"./experiments_plateau_{mode}{'' if mode == 'X' else str(num_init_bases)}/{dir_name}"
+dir_path = f"./experiments_plateau_{mode}{'' if mode == 'X' else str(num_init_bases)}_Q{TARGET_QUBIT_IN}/{dir_name}"
 file_name  = f"report_{'Hall' if Z is None else ('Z' + ''.join([str(z) for z in Z]))}.csv"
 
 os.makedirs(dir_path, exist_ok=True)
 
-print(f"Experiments: {E}, Max_Qubits: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, N: {N}, Z: {Z}\
+print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, N: {N}, Z: {Z}\
 , mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}")
 pbar_all = tqdm(range(E))
 for e in pbar_all:
     pbar = tqdm(enumerate(TARGET_ASSET), leave=False)
     for i, N_ASSETS in pbar:
+        df_now = pd.read_csv(f"{dir_path}/{file_name}") if os.path.exists(f"{dir_path}/{file_name}") else None
+        # print("\nhere\n")
+        if df_now is not None:
+            if df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
+                if df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), "N"].values[0] >= N:
+                    continue
+                else:
+                    it_st, sum_1, sum_2 = df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), ["N", "Sum_1", "Sum_2"]].values[0]
+                    it_st = int(it_st)
+            else:
+                df_now.loc[-1] = [e, N_ASSETS, n_qubit, 0, 0.0, 0.0, 0.0, B]
+        else:
+            df_now = pd.DataFrame(np.array([e, N_ASSETS, TARGET_QUBIT, 0, 0.0, 0.0, 0.0, B])[None, :], columns=report_col)
+
         np.random.seed(911 + 991 * e + 997 * N_ASSETS)
         state = np.random.get_state()
         # asset_idx = np.random.choice(data_cov_pd.shape[0], max(TARGET_ASSET), replace=False)
@@ -204,8 +218,8 @@ for e in pbar_all:
             H = H_ansatz
         else:
             H = 1
-            for i in range(len(Z)):
-                H = H * cudaq.spin.z(Z[i])
+            for j in range(len(Z)):
+                H = H * cudaq.spin.z(Z[j])
         # H_1 = cudaq.spin.z(7) * cudaq.spin.z(8)
         # # H_2 = cudaq.spin.z(n_qubit//2) * cudaq.spin.z(n_qubit//2 + 1)
         # H_2 = cudaq.spin.z(7) * cudaq.spin.z(8)
@@ -247,19 +261,6 @@ for e in pbar_all:
         mm_i = np.pi / min(mm_1, mm_2, mm_p)
 
         it_st, sum_1, sum_2 = 0, 0.0, 0.0
-        df_now = pd.read_csv(f"{dir_path}/{file_name}") if os.path.exists(f"{dir_path}/{file_name}") else None
-        # print("\nhere\n")
-        if df_now is not None:
-            if df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
-                if df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), "N"].values[0] >= N:
-                    continue
-                else:
-                    it_st, sum_1, sum_2 = df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), ["N", "Sum_1", "Sum_2"]].values[0]
-                    it_st = int(it_st)
-            else:
-                df_now.loc[-1] = [e, N_ASSETS, n_qubit, 0, 0.0, 0.0, 0.0, B]
-        else:
-            df_now = pd.DataFrame(np.array([e, N_ASSETS, TARGET_QUBIT, 0, 0.0, 0.0, 0.0, B])[None, :], columns=report_col)
         # np.random.set_state(rand_state)
         np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS)
         points = np.random.uniform(-1, 1, (N, parameter_count))
