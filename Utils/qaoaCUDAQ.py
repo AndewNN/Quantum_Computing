@@ -488,7 +488,11 @@ def get_optimizer(idx):
     FIND_GRAD = True if optimizer.requires_gradients() else False
     return optimizer, optimizer_name, FIND_GRAD
 
-def all_state_to_return(qb, lam, QUBO): # QUBOI of Max problem
+def all_state_to_return(qb, lam, QUBO): # QUBO of Max problem
+    '''
+    IMPORTANT: 
+        QUBO: must be QUBO of MAX problem!!!
+    '''
     # print("all 0")
     ll = np.zeros((qb, 1<<qb), dtype=np.float32)
     a_0 = np.zeros(1<<qb, dtype=np.float32)
