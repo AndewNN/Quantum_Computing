@@ -269,8 +269,11 @@ for i, N_ASSETS in pbar_A:
         prob = np.abs(result_r)**2
 
         # approx_ratio = (prob * (state_return)).sum() / state_return.max()
-        approx_ratio = -optimal_expectation / state_return.max()
-        maxprob_ratio = state_return[int(idx_best, 2)] / max(state_return)
+        mi_r, ma_r = state_return.min(), state_return.max()
+        # approx_ratio = -optimal_expectation / ma_r
+        # maxprob_ratio = state_return[int(idx_best, 2)] / max(state_return)
+        approx_ratio = (-optimal_expectation - mi_r) / (ma_r - mi_r)
+        maxprob_ratio = (state_return[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
         observe_time = time.time() - st
 
         df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, maxprob_ratio, init_1_time, init_2_time, optim_time, observe_time]
