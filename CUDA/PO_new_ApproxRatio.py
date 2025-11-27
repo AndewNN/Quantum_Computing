@@ -134,8 +134,9 @@ expect_name = f"expectation_{file_postfix}.npz"
 os.makedirs(dir_path, exist_ok=True)
 
 print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}")
-pbar_A = tqdm(enumerate(TARGET_ASSET))
-for i, N_ASSETS in pbar_A:
+pbar_A = tqdm(TARGET_ASSET)
+for i, N_ASSETS in enumerate(pbar_A):
+    pbar_A.set_description(f"Assets {N_ASSETS}")
     pbar_exp = tqdm(range(E), leave=False)
     for e in pbar_exp:
         df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else None
