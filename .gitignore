@@ -1,4 +1,5 @@
 dataset/*
+debug/*
 CUDA/output/*
 CUDA/output_PO/*
 Reports/

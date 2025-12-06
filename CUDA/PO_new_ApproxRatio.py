@@ -183,9 +183,22 @@ for i, N_ASSETS in enumerate(pbar_A):
         lamb = LAMB
 
         QU = ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
+        QU_lamb = ret_cov_to_QUBO(np.zeros_like(ret_bb), np.zeros_like(cov_bb), P_bb, lamb, 0.0)
+        QU_eval = ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, 0.0, q)
         hamiltonian_boost = (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
-        H_ansatz = -qubo_to_ising(QU, lamb).canonicalize() * hamiltonian_boost
+        H_ansatz = -qubo_to_ising(QU, lamb if mode == "X" else 0.0).canonicalize() * hamiltonian_boost
+        H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize() * hamiltonian_boost
+
         state_return = all_state_to_return(n_qubit, lamb, QU)
+        state_penalty = all_state_to_return(n_qubit, lamb, QU_lamb)
+        state_eval = all_state_to_return(n_qubit, 0.0, QU_eval)
+
+
+        # np.save(f"./debug/state_return_{file_postfix}_p{LAYER}_L{f_LAMB}_q{f_Q}_A{N_ASSETS}_Q{TARGET_QUBIT}.npy", np.array(state_return))
+        # print("saved")
+        # break
+
+
         init_1_time = time.time() - st
 
         pbar_exp.set_description("init_2 ")
@@ -199,7 +212,8 @@ for i, N_ASSETS in enumerate(pbar_A):
         if mode == "X":
             ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use)
         else:
-            init_state = get_init_states(state_return, num_init_bases, n_qubit)
+            # init_state = get_init_states(state_return, num_init_bases, n_qubit)
+            init_state = get_init_states(state_penalty, num_init_bases, n_qubit)
             n_bases = len(init_state)
             # print("n_bases:", n_bases)
             T = np.zeros((n_bases, n_bases), dtype=np.float32)
@@ -234,7 +248,8 @@ for i, N_ASSETS in enumerate(pbar_A):
         def cost_func(parameters, cal_expectation=False):
             exp_return = float(cudaq.observe(kernel_qaoa_use, H_ansatz, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
             if cal_expectation:
-                expectations.append(exp_return)
+                exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                expectations.append([exp_return, exp_return_eval])
             return exp_return
 
         def objective(parameters):
