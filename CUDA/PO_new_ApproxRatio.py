@@ -17,13 +17,13 @@ pd.set_option('display.width', 1000)
 # np.random.seed(109)
 # rand_state = np.random.get_state()
 
-report_col = ["Assets", "Exp", "Qubits", "Approximate_ratio", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "observe_time"]
+report_col = ["Assets", "Exp", "Qubits", "Approximate_ratio", "Budget_Violations", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "observe_time"]
 
 TARGET_QUBIT_IN = 3
 TARGET_ASSET = [3, 4, 5, 6, 7]
 min_P, max_P = 125, 250
-hamiltonian_X_boost = 1
-hamiltonian_P_boost = 2000
+hamiltonian_X_boost = 7500
+hamiltonian_P_boost = 7500
 modes = ["X", "Preserving"]
 
 def file_copy(src, dst):
@@ -91,6 +91,21 @@ def parse_argss():
         help="Number of preserving bases (int)"
     )
 
+    # Hamiltonian boost for X mixer
+    parser.add_argument(
+        "-b_X", "--ham_boost_X",
+        type=int, default=hamiltonian_X_boost,
+        help="Hamiltonian boost for X mixer (int)"
+    )
+
+    # Hamiltonian boost for Preserving mixer
+    parser.add_argument(
+        "-b_P", "--ham_boost_P",
+        type=int, default=hamiltonian_P_boost,
+        help="Hamiltonian boost for Preserving mixer (int)"
+    )
+
+
     return parser.parse_args()
 
 args = parse_argss()
@@ -107,6 +122,8 @@ E = args.exp
 mode = args.mode
 num_init_bases = args.bases
 fd = cudaq.gradients.ForwardDifference()
+hamiltonian_X_boost = args.ham_boost_X
+hamiltonian_P_boost = args.ham_boost_P
 
 assert mode in modes, f"Mode {mode} not in {modes}"
 
@@ -133,7 +150,7 @@ expect_name = f"expectation_{file_postfix}.npz"
 
 os.makedirs(dir_path, exist_ok=True)
 
-print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}")
+print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}, boost: {hamiltonian_X_boost if mode == 'X' else hamiltonian_P_boost}")
 pbar_A = tqdm(TARGET_ASSET)
 for i, N_ASSETS in enumerate(pbar_A):
     pbar_A.set_description(f"Assets {N_ASSETS}")
@@ -186,11 +203,12 @@ for i, N_ASSETS in enumerate(pbar_A):
         QU_lamb = ret_cov_to_QUBO(np.zeros_like(ret_bb), np.zeros_like(cov_bb), P_bb, lamb, 0.0)
         QU_eval = ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, 0.0, q)
         hamiltonian_boost = (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
-        H_ansatz = -qubo_to_ising(QU, lamb if mode == "X" else 0.0).canonicalize() * hamiltonian_boost
+        H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize() * hamiltonian_boost
+        H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize()
         H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize() * hamiltonian_boost
 
-        state_return = all_state_to_return(n_qubit, lamb, QU)
-        state_penalty = all_state_to_return(n_qubit, lamb, QU_lamb)
+        # state_return = all_state_to_return(n_qubit, lamb, QU)
+        state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb)
         state_eval = all_state_to_return(n_qubit, 0.0, QU_eval)
 
 
@@ -246,10 +264,11 @@ for i, N_ASSETS in enumerate(pbar_A):
         st = time.time()
         expectations = []
         def cost_func(parameters, cal_expectation=False):
-            exp_return = float(cudaq.observe(kernel_qaoa_use, H_ansatz, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+            exp_return = float(cudaq.observe(kernel_qaoa_use, H_ansatz, parameters, *ansatz_fixed_param).expectation())
             if cal_expectation:
-                exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-                expectations.append([exp_return, exp_return_eval])
+                exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation())
+                exp_return_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, parameters, *ansatz_fixed_param).expectation())
+                expectations.append([exp_return / hamiltonian_boost, exp_return_eval / hamiltonian_boost, exp_return_lamb])
             return exp_return
 
         def objective(parameters):
@@ -272,6 +291,7 @@ for i, N_ASSETS in enumerate(pbar_A):
             curr_expect = {}
         curr_expect = dict(curr_expect)
         curr_expect[f'A{N_ASSETS}_E{e}'] = np.array(expectations)
+        curr_expect[f'A{N_ASSETS}_E{e}_params'] = np.array(optimal_parameters)
         np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
         optim_time = time.time() - st
 
@@ -283,16 +303,17 @@ for i, N_ASSETS in enumerate(pbar_A):
 
         result_r = cudaq.get_state(kernel_flipped, result, TARGET_QUBIT)
         prob = np.abs(result_r)**2
+        # print(-np.sort(-prob)[:5])
 
-        # approx_ratio = (prob * (state_return)).sum() / state_return.max()
-        mi_r, ma_r = state_return.min(), state_return.max()
-        # approx_ratio = -optimal_expectation / ma_r
-        # maxprob_ratio = state_return[int(idx_best, 2)] / max(state_return)
-        approx_ratio = (-optimal_expectation - mi_r) / (ma_r - mi_r)
-        maxprob_ratio = (state_return[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
+        mi_r, ma_r = state_eval.min(), state_eval.max()
+        optimal_expectation = (prob * (state_eval)).sum()
+
+        approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
+        maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
+        budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation())
         observe_time = time.time() - st
 
-        df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, maxprob_ratio, init_1_time, init_2_time, optim_time, observe_time]
+        df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, budget_violation, maxprob_ratio, init_1_time, init_2_time, optim_time, observe_time]
         df_now.sort_values(by=["Assets", "Exp"], inplace=True)
         df_now.reset_index(drop=True, inplace=True)
         df_now.to_csv(f"{dir_path}/{report_name}", index=False)

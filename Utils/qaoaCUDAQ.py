@@ -167,7 +167,7 @@ def ret_cov_to_QUBO(ret: np.ndarray, cov: np.ndarray, P: np.ndarray, lamb: float
     return di - mat
 
 def qubo_to_ising(qubo: np.ndarray, lamb: float) -> cudaq.SpinOperator:
-    spin_op = -lamb
+    spin_op = -lamb * spin.i(0)
     for i in range(qubo.shape[0]):
         for j in range(qubo.shape[1]):
                 if i != j and qubo[i, j] != 0:
@@ -506,7 +506,8 @@ def all_state_to_return(qb, lam, QUBO): # QUBO of Max problem
     return ss.reshape(-1) - lam
 
 def get_init_states(state_return, N, n_qubits):
-    sorted_idx = np.argsort(-state_return)
+    sorted_idx = np.argsort(state_return)
+    # print(state_return[sorted_idx[:N]])
     init_states = []
     for i in sorted_idx[:N]:
         init_states.append(bin(i)[2:].zfill(n_qubits))
