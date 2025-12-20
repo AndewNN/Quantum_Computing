@@ -20,6 +20,7 @@ import os
 # Import cudaq and its associated spin operators.
 import cudaq
 from cudaq import spin
+import psutil
 
 # QAOA subkernel for a weighted edge rotation.
 @cudaq.kernel
@@ -269,12 +270,23 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
         return A, B
         
     A_all, B_all = 0, 0
+    cou = 0
+    left_t = (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30)
     for i in range(T.shape[0]):
         for j in range(i + 1, T.shape[1]):
+            if T[i, j] == 0:
+                continue
             A_now, B_now = get_pauli(bases[i], bases[j])
             A_all += T[i, j] * A_now
             B_all += T[i, j] * B_now
-    
+            cou += 1
+            print("Cou:", cou)
+            # print("Ram left:", psutil.virtual_memory().total / (1<<30), psutil.virtual_memory().available / (1<<30), (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30))
+            left_now = (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30)
+            print("Ram used:", left_now - left_t)
+            left_t = left_now
+            print(A_all.term_count, B_all.term_count)
+
     ret_s, ret_c = [], []
 
     for i in A_all:
@@ -511,6 +523,7 @@ def get_init_states(state_return, N, n_qubits):
     init_states = []
     for i in sorted_idx[:N]:
         init_states.append(bin(i)[2:].zfill(n_qubits))
+    # print("state_return_last:", state_return[sorted_idx[N-1]])
     return init_states
 
 def find_budget(target_qubit, P, min_P, max_P, min_mix_mode = False):
