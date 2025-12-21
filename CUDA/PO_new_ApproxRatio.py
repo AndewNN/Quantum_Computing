@@ -115,9 +115,9 @@ def parse_argss():
         help="List of epsilon for budget feasible set for each Asset, e.g. -eps 0.1 0.2"
     )
 
-    # using tqdm pbar?
+    # disable progress bar
     parser.add_argument(
-        "--non_pbar",
+        "--no_pbar",
         action="store_true", default=False,
         help="Use tqdm progress bar (bool) e.g. --pbar True or --pbar False"
     )
@@ -142,20 +142,20 @@ fd = cudaq.gradients.ForwardDifference()
 hamiltonian_X_boost = args.ham_boost_X
 hamiltonian_P_boost = args.ham_boost_P
 eps = args.epsilon
-is_pbar = not args.non_pbar
-print(is_pbar)
+is_pbar = not args.no_pbar
 
 assert mode in modes, f"Mode {mode} not in {modes}"
 assert len(eps) == 1 or len(eps) == len(TARGET_ASSET), "Length of eps must be 1 or equal to length of TARGET_ASSET"
 if len(eps) == 1:
     eps = eps * len(TARGET_ASSET)
+eps = np.array(eps)
 
-a = cudaq.spin.x(0) * cudaq.spin.x(1) * cudaq.spin.z(2) * cudaq.spin.z(3) * cudaq.spin.y(4)
-b = cudaq.spin.y(0) * cudaq.spin.x(1) * cudaq.spin.z(2) * cudaq.spin.z(3) * cudaq.spin.y(4)
-s_a, s_b = a.get_pauli_word(), b.get_pauli_word()
-c_a, c_b = a.evaluate_coefficient().real, b.evaluate_coefficient().real
-print(sys.getsizeof(s_a), sys.getsizeof(s_b))
-print(sys.getsizeof(c_a), sys.getsizeof(c_b))
+# a = cudaq.spin.x(0) * cudaq.spin.x(1) * cudaq.spin.z(2) * cudaq.spin.z(3) * cudaq.spin.y(4)
+# b = cudaq.spin.y(0) * cudaq.spin.x(1) * cudaq.spin.z(2) * cudaq.spin.z(3) * cudaq.spin.y(4)
+# s_a, s_b = a.get_pauli_word(), b.get_pauli_word()
+# c_a, c_b = a.evaluate_coefficient().real, b.evaluate_coefficient().real
+# print(sys.getsizeof(s_a), sys.getsizeof(s_b))
+# print(sys.getsizeof(c_a), sys.getsizeof(c_b))
 # exit(0)
 
 # Dataset
@@ -167,7 +167,7 @@ data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
 #                                        |- report_X_boost_1.csv
 #                                        |- report_Preserving_12_boost_2000.csv
 #                                        |- report_Preserving_24_boost_2000.csv
-#                                        |- expectation_X_boost_1.npz [A * E, #optim_loops(varies)]
+#                                        |- expectation_X_boost_1.npz [A * E, #optim_loops(varies), 2 * LAYER]
 #                                        |- expectation_Preserving_12_boost_2000.npz [A * E, #optim_loops(varies)]
 #                                        |- expectation_Preserving_24_boost_2000.npz [A * E, #optim_loops(varies)]
 
@@ -255,6 +255,24 @@ for i, N_ASSETS in (enumerate(TARGET_ASSET) if not is_pbar else enumerate(pbar_A
         # print("saved")
         # break
 
+        # |P^t x -1| <= eps
+        # lamb (P^t x -1)^2 <= lamb * eps^2
+        eps_t = lamb * (eps[i]) ** 2
+        idx_feasible = np.where(np.abs(state_penalty) <= eps_t)
+
+        # direct compute
+        # state_penalty_eps = np.sqrt(state_penalty / lamb)
+        # idx_feasible_debug = np.where(state_penalty_eps <= eps[i])
+        # print("equality:", (sorted(idx_feasible[0]) == sorted(idx_feasible_debug[0]))) 
+        # break
+        
+        # mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
+        # print(len(idx_feasible))
+        # idx_dbg = np.argsort(state_penalty)
+        # print(np.sqrt(state_penalty[idx_dbg[[1]]] / lamb))
+        # print("mi", mi_r, ma_r)
+        # break
+
 
         init_1_time = time.time() - st
 
@@ -275,8 +293,10 @@ for i, N_ASSETS in (enumerate(TARGET_ASSET) if not is_pbar else enumerate(pbar_A
             init_state = get_init_states(state_penalty, num_init_bases, n_qubit)
             # # print(init_state[num_init_bases-1], P_bb)
             # uuu = np.array([int(e) for e in init_state[num_init_bases-1]])
-            # print((uuu @ P_bb - 1))
-            # continue
+            # print(-1 * (uuu @ P_bb - 1))
+            # idxx = np.argsort(state_penalty)
+            # print(np.sqrt(state_penalty[idxx[[num_init_bases-1]]] / lamb))
+            # break
             n_bases = len(init_state)
             # print("n_bases:", n_bases)
             T = np.zeros((n_bases, n_bases), dtype=np.float32)
@@ -361,7 +381,8 @@ for i, N_ASSETS in (enumerate(TARGET_ASSET) if not is_pbar else enumerate(pbar_A
         prob = np.abs(result_r)**2
         # print(-np.sort(-prob)[:5])
 
-        mi_r, ma_r = state_eval.min(), state_eval.max()
+        # mi_r, ma_r = state_eval.min(), state_eval.max()
+        mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
         optimal_expectation = (prob * (state_eval)).sum()
 
         approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
