@@ -21,6 +21,8 @@ import os
 import cudaq
 from cudaq import spin
 import psutil
+from multiprocessing.pool import ThreadPool
+import threading
 
 # QAOA subkernel for a weighted edge rotation.
 @cudaq.kernel
@@ -234,58 +236,80 @@ def int_to_pauli(value: int, n_qubits: int) -> str:
             pauli_str += 'Z'
     return pauli_str
 
-def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
-    def init_pauli(x, y):
-        if x == "0" and y == "0":
-            A = spin.i(0) + spin.z(0)
-            # B = spin.i(0) + spin.z(0)
-            B = 0
-        elif x == "0" and y == "1":
-            A = spin.x(0)
-            B = -spin.y(0)
-        elif x == "1" and y == "0":
-            A = spin.x(0)
-            B = spin.y(0)
-        elif x == "1" and y == "1":
-            A = spin.i(0) - spin.z(0)
-            # B = spin.i(0) - spin.z(0)
-            B = 0
-        return A, B
+def init_pauli(x, y):
+    if x == "0" and y == "0":
+        A = spin.i(0) + spin.z(0)
+        # B = spin.i(0) + spin.z(0)
+        B = 0
+    elif x == "0" and y == "1":
+        A = spin.x(0)
+        B = -spin.y(0)
+    elif x == "1" and y == "0":
+        A = spin.x(0)
+        B = spin.y(0)
+    elif x == "1" and y == "1":
+        A = spin.i(0) - spin.z(0)
+        # B = spin.i(0) - spin.z(0)
+        B = 0
+    return A, B
 
-    def transform_pauli(x, y, idx, A, B):
-        if x == "0" and y == "0":
-            A_, B_ = 0.5 * A * (spin.i(idx) + spin.z(idx)), 0.5 * B * (spin.i(idx) + spin.z(idx))
-        elif x == "0" and y == "1":
-            A_, B_ = 0.5 * (A * spin.x(idx) + B * spin.y(idx)), 0.5 * (B * spin.x(idx) - A * spin.y(idx))
-        elif x == "1" and y == "0":
-            A_, B_ = 0.5 * (A * spin.x(idx) - B * spin.y(idx)), 0.5 * (B * spin.x(idx) + A * spin.y(idx))
-        elif x == "1" and y == "1":
-            A_, B_ = 0.5 * A * (spin.i(idx) - spin.z(idx)), 0.5 * B * (spin.i(idx) - spin.z(idx))
-        return A_, B_
-    
-    def get_pauli(X, Y):
-        A, B = init_pauli(X[0], Y[0])
-        for i in range(1, len(X)):
-            A, B = transform_pauli(X[i], Y[i], i, A, B)
-        return A, B
+def transform_pauli(x, y, idx, A, B):
+    if x == "0" and y == "0":
+        A_, B_ = 0.5 * A * (spin.i(idx) + spin.z(idx)), 0.5 * B * (spin.i(idx) + spin.z(idx))
+    elif x == "0" and y == "1":
+        A_, B_ = 0.5 * (A * spin.x(idx) + B * spin.y(idx)), 0.5 * (B * spin.x(idx) - A * spin.y(idx))
+    elif x == "1" and y == "0":
+        A_, B_ = 0.5 * (A * spin.x(idx) - B * spin.y(idx)), 0.5 * (B * spin.x(idx) + A * spin.y(idx))
+    elif x == "1" and y == "1":
+        A_, B_ = 0.5 * A * (spin.i(idx) - spin.z(idx)), 0.5 * B * (spin.i(idx) - spin.z(idx))
+    return A_, B_
+
+def get_pauli(X, Y):
+    A, B = init_pauli(X[0], Y[0])
+    for i in range(1, len(X)):
+        A, B = transform_pauli(X[i], Y[i], i, A, B)
+    # print(f"Done by thread    : '{threading.current_thread().name}'")
+    return A, B
         
+def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
     A_all, B_all = 0, 0
     cou = 0
-    left_t = (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30)
-    for i in range(T.shape[0]):
-        for j in range(i + 1, T.shape[1]):
-            if T[i, j] == 0:
-                continue
-            A_now, B_now = get_pauli(bases[i], bases[j])
-            A_all += T[i, j] * A_now
-            B_all += T[i, j] * B_now
-            cou += 1
-            print("Cou:", cou)
-            # print("Ram left:", psutil.virtual_memory().total / (1<<30), psutil.virtual_memory().available / (1<<30), (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30))
-            left_now = (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30)
-            print("Ram used:", left_now - left_t)
-            left_t = left_now
-            print(A_all.term_count, B_all.term_count)
+    # left_t = (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30)
+    # for i in range(T.shape[0]):
+    #     for j in range(i + 1, T.shape[1]):
+    #         if T[i, j] == 0:
+    #             continue
+    #         A_now, B_now = get_pauli(bases[i], bases[j])
+    #         A_all += T[i, j] * A_now
+    #         # B_all += T[i, j] * B_now
+    #         cou += 1
+    #         print("Cou:", cou)
+    #         # print("Ram left:", psutil.virtual_memory().total / (1<<30), psutil.virtual_memory().available / (1<<30), (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30))
+    #         left_now = (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30)
+    #         print("Ram used:", left_now - left_t)
+    #         left_t = left_now
+    #         print(A_all.term_count)
+
+    indices = [(i, j) for i in range(T.shape[0]) for j in range(i + 1, T.shape[1]) if T[i, j] != 0]
+    indices_bases = [(bases[i], bases[j]) for i in range(T.shape[0]) for j in range(i + 1, T.shape[1]) if T[i, j] != 0]
+    max_threads = psutil.cpu_count(logical=True)
+
+    # with Pool() as pool:
+    #     results = pool.starmap(get_pauli, indices, chunksize=6)
+
+    with ThreadPool(processes=max_threads) as pool:
+        # starmap preserves order, which is important for cancellation
+        results = pool.starmap(
+            get_pauli,
+            indices_bases,
+            chunksize=max(1, len(indices) // (max_threads))
+        )
+
+    for idx, (i, j) in enumerate(indices):
+        A_now, B_now = results[idx]
+        A_all += T[i, j] * A_now
+        # B_all += T[i, j] * B_now
+
 
     ret_s, ret_c = [], []
 

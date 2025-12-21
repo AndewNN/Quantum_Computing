@@ -27,6 +27,7 @@ min_P, max_P = 125, 250
 hamiltonian_X_boost = 7500
 hamiltonian_P_boost = 7500
 modes = ["X", "Preserving"]
+eps = [0.1]
 
 def file_copy(src, dst):
     try:
@@ -107,6 +108,20 @@ def parse_argss():
         help="Hamiltonian boost for Preserving mixer (int)"
     )
 
+    # epsilon for budget feasible set for each Asset
+    parser.add_argument(
+        "-eps", "--epsilon",
+        nargs="+", type=float, default=eps,
+        help="List of epsilon for budget feasible set for each Asset, e.g. -eps 0.1 0.2"
+    )
+
+    # using tqdm pbar?
+    parser.add_argument(
+        "--non_pbar",
+        action="store_true", default=False,
+        help="Use tqdm progress bar (bool) e.g. --pbar True or --pbar False"
+    )
+
 
     return parser.parse_args()
 
@@ -126,8 +141,14 @@ num_init_bases = args.bases
 fd = cudaq.gradients.ForwardDifference()
 hamiltonian_X_boost = args.ham_boost_X
 hamiltonian_P_boost = args.ham_boost_P
+eps = args.epsilon
+is_pbar = not args.non_pbar
+print(is_pbar)
 
 assert mode in modes, f"Mode {mode} not in {modes}"
+assert len(eps) == 1 or len(eps) == len(TARGET_ASSET), "Length of eps must be 1 or equal to length of TARGET_ASSET"
+if len(eps) == 1:
+    eps = eps * len(TARGET_ASSET)
 
 a = cudaq.spin.x(0) * cudaq.spin.x(1) * cudaq.spin.z(2) * cudaq.spin.z(3) * cudaq.spin.y(4)
 b = cudaq.spin.y(0) * cudaq.spin.x(1) * cudaq.spin.z(2) * cudaq.spin.z(3) * cudaq.spin.y(4)
@@ -161,13 +182,18 @@ expect_name = f"expectation_{file_postfix}.npz"
 os.makedirs(dir_path, exist_ok=True)
 
 print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}, boost: {hamiltonian_X_boost if mode == 'X' else hamiltonian_P_boost}")
-# pbar_A = tqdm(TARGET_ASSET)
+# if __name__ == "__main__":
+    # from multiprocessing import freeze_support
+    # freeze_support()
+if is_pbar:
+    pbar_A = tqdm(TARGET_ASSET)
 # for i, N_ASSETS in enumerate(pbar_A):
-for i, N_ASSETS in enumerate(TARGET_ASSET):
-    # pbar_A.set_description(f"Assets {N_ASSETS}")
-    # pbar_exp = tqdm(range(E), leave=False)
-    # for e in pbar_exp:
-    for e in range(E):
+for i, N_ASSETS in (enumerate(TARGET_ASSET) if not is_pbar else enumerate(pbar_A)):
+    if is_pbar:
+        pbar_A.set_description(f"Assets {N_ASSETS}")
+        pbar_exp = tqdm(range(E), leave=False)
+    for e in (range(E) if not is_pbar else pbar_exp):
+    # for e in range(E):
         df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else None
         if df_now is not None:
             if df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
@@ -175,7 +201,8 @@ for i, N_ASSETS in enumerate(TARGET_ASSET):
         else :
             df_now = pd.DataFrame(columns=report_col)
 
-        # pbar_exp.set_description("init_1 ")
+        if is_pbar:
+            pbar_exp.set_description("init_1 ")
         st = time.time()
         np.random.seed(911 + 991 * e + 997 * N_ASSETS)
         state = np.random.get_state()
@@ -231,7 +258,8 @@ for i, N_ASSETS in enumerate(TARGET_ASSET):
 
         init_1_time = time.time() - st
 
-        # pbar_exp.set_description("init_2 ")
+        if is_pbar:
+            pbar_exp.set_description("init_2 ")
         st = time.time()
         idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H_ansatz)
         coeff_1_use, coeff_2_use = np.array(coeff_1_use), np.array(coeff_2_use)
@@ -257,9 +285,9 @@ for i, N_ASSETS in enumerate(TARGET_ASSET):
             T[0, -1] = T[-1, 0] = 1.0
             # print(T)
             mixer_s, mixer_c = basis_T_to_pauli(init_state, T, n_qubit)
-            print(len(mixer_s))
-            mixer_s = mixer_s[:250000]
-            mixer_c = mixer_c[:250000]
+            print("num pauli string (1 layer):", len(mixer_s))
+            # mixer_s = mixer_s[:250000]
+            # mixer_c = mixer_c[:250000]
             # break
             init_bases = reversed_str_bases_to_init_state(init_state, n_qubit)
 
@@ -281,18 +309,19 @@ for i, N_ASSETS in enumerate(TARGET_ASSET):
         points[1::2] *= np.pi
         init_2_time = time.time() - st
 
-        # pbar_exp.set_description("optim  ")
-        print("start optimization")
+        if is_pbar:
+            pbar_exp.set_description("optim  ")
+        # print("start optimization")
         st = time.time()
         expectations = []
         def cost_func(parameters, cal_expectation=False):
-            print("in 1")
+            # print("in 1")
             exp_return = float(cudaq.observe(kernel_qaoa_use, H_ansatz, parameters, *ansatz_fixed_param).expectation())
-            print("in 2")
+            # print("in 2")
             if cal_expectation:
-                print("in cal 1")
+                # print("in cal 1")
                 exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation())
-                print("in cal 2")
+                # print("in cal 2")
                 exp_return_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, parameters, *ansatz_fixed_param).expectation())
                 expectations.append([exp_return / hamiltonian_boost, exp_return_eval / hamiltonian_boost, exp_return_lamb])
             return exp_return
@@ -321,7 +350,8 @@ for i, N_ASSETS in enumerate(TARGET_ASSET):
         np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
         optim_time = time.time() - st
 
-        # pbar_exp.set_description("observe")
+        if is_pbar:
+            pbar_exp.set_description("observe")
         st = time.time()
         result = cudaq.get_state(kernel_qaoa_use, optimal_parameters, *ansatz_fixed_param)
         idx_r_best = np.argmax(np.abs(result))
