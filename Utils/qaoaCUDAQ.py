@@ -21,8 +21,12 @@ import os
 import cudaq
 from cudaq import spin
 import psutil
-from multiprocessing.pool import ThreadPool
+#from multiprocessing.pool import ThreadPool
+from multiprocessing import Pool
 import threading
+import time
+from collections import defaultdict
+from functools import partial
 
 # QAOA subkernel for a weighted edge rotation.
 @cudaq.kernel
@@ -264,14 +268,40 @@ def transform_pauli(x, y, idx, A, B):
         A_, B_ = 0.5 * A * (spin.i(idx) - spin.z(idx)), 0.5 * B * (spin.i(idx) - spin.z(idx))
     return A_, B_
 
+
+#import numba
+#@numba.jit(nogil=True, nopython=True)
 def get_pauli(X, Y):
     A, B = init_pauli(X[0], Y[0])
     for i in range(1, len(X)):
         A, B = transform_pauli(X[i], Y[i], i, A, B)
-    # print(f"Done by thread    : '{threading.current_thread().name}'")
-    return A, B
+    print(f"Done by thread    : '{threading.current_thread().name}'")
+    return A
+
+def _get_pauli_objects(X, Y):
+    A, B = init_pauli(X[0], Y[0])
+    for i in range(1, len(X)):
+        A, B = transform_pauli(X[i], Y[i], i, A, B)
+    return A
+
+def get_pauli_serializable(X, Y, n_qubits):
+    """
+    Computes the Pauli spin operators but returns their data representation
+    (a list of tuples) which is safe for multiprocessing.
+    """
+    A_obj = _get_pauli_objects(X, Y)
+
+    serializable_A = []
+    for term in A_obj:
+        coeff = term.evaluate_coefficient()
+        pauli_word = term.get_pauli_word(n_qubits)
+        if coeff.real != 0 and len(pauli_word) > 0:
+            serializable_A.append((coeff.real, pauli_word))
+        return serializable_A
         
 def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
+    print("Compute pauli")
+    st_pauli_compute = time.time()
     A_all, B_all = 0, 0
     cou = 0
     # left_t = (psutil.virtual_memory().total - psutil.virtual_memory().available) / (1<<30)
@@ -292,27 +322,45 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
 
     indices = [(i, j) for i in range(T.shape[0]) for j in range(i + 1, T.shape[1]) if T[i, j] != 0]
     indices_bases = [(bases[i], bases[j]) for i in range(T.shape[0]) for j in range(i + 1, T.shape[1]) if T[i, j] != 0]
-    max_threads = psutil.cpu_count(logical=True)
-
+    max_threads = max_processes = psutil.cpu_count(logical=True)
+    worker_func = partial(get_pauli_serializable, n_qubits=n_qubits)
+    
     # with Pool() as pool:
     #     results = pool.starmap(get_pauli, indices, chunksize=6)
+    print("Threads:", max_threads)
+    print("cpu_affinity:", psutil.Process().cpu_affinity())
+#    os.system("taskset -p 0xff %d" % os.getpid())
 
-    with ThreadPool(processes=max_threads) as pool:
-        # starmap preserves order, which is important for cancellation
-        results = pool.starmap(
-            get_pauli,
-            indices_bases,
-            chunksize=max(1, len(indices) // (max_threads))
-        )
+#    with ThreadPool(processes=max_threads) as pool:
+#        # starmap preserves order, which is important for cancellation
+#        results = pool.starmap(
+#            get_pauli,
+#            indices_bases,
+# #            chunksize=max(1, len(indices) // (max_threads))
+# #            chunksize=100
+#            chunksize=1
+#        )
 
+    
+    with Pool(processes=max_processes) as pool:
+        chunksize = max(1, len(indices) // max_processes)
+        print("Working with chunksize:", chunksize)
+        results = pool.starmap(worker_func, indices_bases, chunksize=chunksize)
+
+    print("Pauli compute:", time.time() - st_pauli_compute)
+
+    print("Start merging...")
+    st_merge = time.time()
+    """
     for idx, (i, j) in enumerate(indices):
-        A_now, B_now = results[idx]
+        A_now = results[idx]
         A_all += T[i, j] * A_now
         # B_all += T[i, j] * B_now
+    print("Merge:", time.time() - st_merge)
+    
 
-
+    st_list = time.time()
     ret_s, ret_c = [], []
-
     for i in A_all:
         s = i.get_pauli_word(n_qubits)
         c = i.evaluate_coefficient()
@@ -321,7 +369,28 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
             ret_s.append(s)
             # print(s)
             ret_c.append(c.real)
-    
+    print("Listing:", time.time() - st_list)
+    """
+
+    summed_terms = defaultdict(float)
+
+    for idx, (i, j) in enumerate(indices):
+        serializable_A = results[idx]
+        T_val = T[i, j]
+
+        for coeff, pauli_word in serializable_A:
+            summed_terms[pauli_word] += T_val * coeff
+
+    print("Merge done in:", time.time() - st_merge)
+
+    st_list = time.time()
+    ret_s, ret_c = [], []
+    for pauli_word, final_coeff in summed_terms.items():
+        if final_coeff != 0:
+            ret_s.append(pauli_word)
+            ret_c.append(final_coeff)
+    print("Listing done in:", time.time() - st_list)
+
     return ret_s, np.array(ret_c)
 
 def reversed_str_bases_to_init_state(bases: List[str], n_qb: int) -> np.ndarray:
