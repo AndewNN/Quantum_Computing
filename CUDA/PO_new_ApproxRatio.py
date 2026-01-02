@@ -4,8 +4,8 @@ import cudaq
 import sys
 import os
 import torch
-from torch.optim import Adam, adamw
-from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim import Adam, AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, ReduceLROnPlateau, ExponentialLR
 import time
 from tqdm import tqdm
 import shutil
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     hamiltonian_P_boost = 7500
     modes = ["X", "Preserving"]
     eps = [0.1]
-    SHIFT = 1e-6
+    SHIFT = 1e-4
 
     os.system("taskset -p 0xfffff %d" % os.getpid())
 
@@ -298,9 +298,12 @@ if __name__ == "__main__":
             hamiltonian_boost = (hamiltonian_X_boost if mode == "X" else hamiltonian_P_boost)
 
             if is_torch_optim:
-                H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize()
+                # H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize()
+                # H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize()
+                # H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize()
+                H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize() * hamiltonian_boost
                 H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize()
-                H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize()
+                H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize() * hamiltonian_boost
             else:
                 H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize() * hamiltonian_boost
                 H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize()
@@ -387,16 +390,23 @@ if __name__ == "__main__":
             if not is_torch_optim:
                 optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
                 optimizer.max_iterations = 210
+                # print(f"\noptim iter: {optimizer.max_iterations}\noptim eps: {optimizer.eps}")
             np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS)
             points = np.random.uniform(-1, 1, (parameter_count))
             points[::2] *= mm_i
             points[1::2] *= np.pi
 
             if is_torch_optim:
-                points_cu = torch.tensor(points, dtype=torch.float32, device=device)
-                optimizer_cu = Adam([points_cu], lr=hamiltonian_boost)
-                # scheduler_cu = CosineAnnealingWarmRestarts(optimizer_cu, T_0=30, T_mult=2, eta_min=hamiltonian_boost * 0.01)
-                scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr=hamiltonian_boost * 1e-4)
+                # points_cu = torch.tensor(points, dtype=torch.float64, device=device)
+                points_cu = torch.tensor(np.zeros_like(points), dtype=torch.float32, device=device)
+
+                # optimizer_cu = Adam([points_cu], lr=hamiltonian_boost)
+                optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.9, 0.999), weight_decay=0)
+                # optimizer_cu = AdamW([points_cu], lr=0.01)
+
+                scheduler_cu = CosineAnnealingWarmRestarts(optimizer_cu, T_0=30000, T_mult=2)
+                # scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.99)
+                # scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr=hamiltonian_boost * 1e-4)
                 FIND_GRAD = True
                 max_iter = 210 # 30 + 60 + 120
 
@@ -417,7 +427,7 @@ if __name__ == "__main__":
                         exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation())
                         # print("in cal 2")
                         exp_return_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, parameters, *ansatz_fixed_param).expectation())
-                        expectations.append([exp_return / hamiltonian_boost, exp_return_eval / hamiltonian_boost, exp_return_lamb])
+                        expectations.append([exp_return / hamiltonian_boost, exp_return_eval / hamiltonian_boost, exp_return_lamb, parameters[0], parameters[1]])
                     return exp_return
 
                 def objective(parameters):
@@ -431,6 +441,8 @@ if __name__ == "__main__":
                 
                 objective_func = objective_grad_cuda if FIND_GRAD else objective
 
+                # optimizer.initial_parameters = points
+                optimizer.initial_parameters = np.zeros_like(points)
                 optimal_expectation, optimal_parameters = optimizer.optimize(
                     dimensions=parameter_count, function=objective_func)
             
@@ -448,6 +460,7 @@ if __name__ == "__main__":
                         expectation_eval = expectation
                     expectation_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, params.cpu().numpy(), *ansatz_fixed_param).expectation())
                     grad = torch.zeros_like(params)
+                    print(grad.dtype)
                     for j in range(parameter_count):
                         shift = np.zeros(parameter_count)
                         shift[j] = SHIFT
@@ -455,22 +468,26 @@ if __name__ == "__main__":
                         # backward = float(cudaq.observe(kernel_qaoa_use, H_ansatz, (params.cpu().numpy() - shift), *ansatz_fixed_param).expectation())
                         # grad[j] = (forward - backward) / (2.0 * SHIFT)
                         grad[j] = (forward - expectation) / SHIFT
+                    # print(grad)
                     points_cu.grad = grad
                     optimizer_cu.step()
-                    scheduler_cu.step(expectation)
-                    expectations.append([expectation, expectation_eval, expectation_lamb])
-                    if optimal_expectation is None or optimal_expectation > expectation_eval:
-                        optimal_expectation = expectation_eval
-                        optimal_parameters = params.cpu().numpy()
+                    scheduler_cu.step()
+                    # print(points_cu[0].item(), points_cu[1].item())
+                    # scheduler_cu.step(expectation)
+                    expectations.append([expectation/hamiltonian_boost, expectation_eval/hamiltonian_boost, expectation_lamb, points_cu[0].item(), points_cu[1].item()])
+                    # if optimal_expectation is None or optimal_expectation > expectation_eval:
+                    #     optimal_expectation = expectation_eval
+                    #     optimal_parameters = points_cu.cpu().numpy()
                     if is_pbar:
-                        pbar_optim.set_description(f"Iter {it}, Exp_obj {expectation:.6f}, Exp_eval {expectation_eval:.6f}, Exp_lamb {expectation_lamb:.6f}, LR {optimizer_cu.param_groups[0]['lr']:.4f}")
-            
+                        pbar_optim.set_description(f"Iter {it}, Exp_obj {expectation/hamiltonian_boost:.6f}, Exp_eval {expectation_eval/hamiltonian_boost:.6f}, Exp_lamb {expectation_lamb:.6f}, LR {optimizer_cu.param_groups[0]['lr']:.4f}")
+                optimal_parameters = points_cu.cpu().numpy()
             if os.path.exists(f"{dir_path}/{expect_name}"):
                 curr_expect = np.load(f"{dir_path}/{expect_name}")
             else:
                 curr_expect = {}
             curr_expect = dict(curr_expect)
             curr_expect[f'A{N_ASSETS}_E{e}'] = np.array(expectations)
+            print("optimal parameters:", optimal_parameters.tolist())
             curr_expect[f'A{N_ASSETS}_E{e}_params'] = np.array(optimal_parameters)
             np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
             optim_time = time.time() - st
@@ -487,6 +504,7 @@ if __name__ == "__main__":
             # print(-np.sort(-prob)[:5])
 
             # mi_r, ma_r = state_eval.min(), state_eval.max()
+            print(f"\n\nhere\n{idx_feasible[0].shape} {eps}\n\n")
             mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
             # print(optimal_expectation)
             optimal_expectation = (prob * (state_eval)).sum()

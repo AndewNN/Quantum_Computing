@@ -327,8 +327,8 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
     
     # with Pool() as pool:
     #     results = pool.starmap(get_pauli, indices, chunksize=6)
-    print("Threads:", max_threads)
-    print("cpu_affinity:", psutil.Process().cpu_affinity())
+    # print("Threads:", max_threads)
+    # print("cpu_affinity:", psutil.Process().cpu_affinity())
 #    os.system("taskset -p 0xff %d" % os.getpid())
 
 #    with ThreadPool(processes=max_threads) as pool:
