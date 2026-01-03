@@ -5,7 +5,7 @@ import sys
 import os
 import torch
 from torch.optim import Adam, AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, ReduceLROnPlateau, ExponentialLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, ReduceLROnPlateau, ExponentialLR, CyclicLR, SequentialLR
 import time
 from tqdm import tqdm
 import shutil
@@ -64,6 +64,13 @@ if __name__ == "__main__":
             "-E", "--exp",
             type=int, default=50,
             help="Number of Experiments (int)"
+        )
+
+        # idx of Starting Experiment (int)
+        parser.add_argument(
+            "-E_st", "--exp_start",
+            type=int, default=0,
+            help="Starting Experiment index (int)"
         )
 
         # Target Qubits per Asset
@@ -185,6 +192,7 @@ if __name__ == "__main__":
     # N = args.N
     # Z = args.basis
     E = args.exp
+    E_st = args.exp_start
     mode = args.mode
     num_init_bases = args.bases
     fd = cudaq.gradients.ForwardDifference()
@@ -245,8 +253,8 @@ if __name__ == "__main__":
     for i, N_ASSETS in (enumerate(TARGET_ASSET) if not is_pbar else enumerate(pbar_A)):
         if is_pbar:
             pbar_A.set_description(f"Assets {N_ASSETS}")
-            pbar_exp = tqdm(range(E), leave=False)
-        for e in (range(E) if not is_pbar else pbar_exp):
+            pbar_exp = tqdm(range(E_st, E), leave=False)
+        for e in (range(E_st, E) if not is_pbar else pbar_exp):
         # for e in range(E):
             df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else None
             if df_now is not None:
@@ -395,18 +403,22 @@ if __name__ == "__main__":
             points = np.random.uniform(-1, 1, (parameter_count))
             points[::2] *= mm_i
             points[1::2] *= np.pi
+            print(f"Initial Parameters: {points.tolist()}")
 
             if is_torch_optim:
                 # points_cu = torch.tensor(points, dtype=torch.float64, device=device)
-                points_cu = torch.tensor(np.zeros_like(points), dtype=torch.float32, device=device)
+                points_cu = torch.tensor(np.zeros_like(points), dtype=torch.float64, device=device)
 
                 # optimizer_cu = Adam([points_cu], lr=hamiltonian_boost)
-                optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.9, 0.999), weight_decay=0)
+                optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.95, 0.98), weight_decay=0.01, decoupled_weight_decay=True)
+                # optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.9, 0.999), weight_decay=0)
                 # optimizer_cu = AdamW([points_cu], lr=0.01)
 
-                scheduler_cu = CosineAnnealingWarmRestarts(optimizer_cu, T_0=30000, T_mult=2)
-                # scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.99)
-                # scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr=hamiltonian_boost * 1e-4)
+                # scheduler_cu = CosineAnnealingWarmRestarts(optimizer_cu, T_0=30, T_mult=2)
+                scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.987)
+                scheduler_warmup = CyclicLR(optimizer_cu, base_lr=0.01, max_lr=0.012, step_size_up=10, step_size_down=10, mode='triangular2')
+                scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_cu], milestones=[40])
+                # scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr= 1e-5)
                 FIND_GRAD = True
                 max_iter = 210 # 30 + 60 + 120
 
@@ -460,7 +472,7 @@ if __name__ == "__main__":
                         expectation_eval = expectation
                     expectation_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, params.cpu().numpy(), *ansatz_fixed_param).expectation())
                     grad = torch.zeros_like(params)
-                    print(grad.dtype)
+                    # print(grad.dtype)
                     for j in range(parameter_count):
                         shift = np.zeros(parameter_count)
                         shift[j] = SHIFT
@@ -471,9 +483,10 @@ if __name__ == "__main__":
                     # print(grad)
                     points_cu.grad = grad
                     optimizer_cu.step()
-                    scheduler_cu.step()
-                    # print(points_cu[0].item(), points_cu[1].item())
+                    # scheduler_cu.step()
                     # scheduler_cu.step(expectation)
+                    scheduler_all.step()
+                    # print(points_cu[0].item(), points_cu[1].item())
                     expectations.append([expectation/hamiltonian_boost, expectation_eval/hamiltonian_boost, expectation_lamb, points_cu[0].item(), points_cu[1].item()])
                     # if optimal_expectation is None or optimal_expectation > expectation_eval:
                     #     optimal_expectation = expectation_eval
@@ -487,7 +500,7 @@ if __name__ == "__main__":
                 curr_expect = {}
             curr_expect = dict(curr_expect)
             curr_expect[f'A{N_ASSETS}_E{e}'] = np.array(expectations)
-            print("optimal parameters:", optimal_parameters.tolist())
+            # print("optimal parameters:", optimal_parameters.tolist())
             curr_expect[f'A{N_ASSETS}_E{e}_params'] = np.array(optimal_parameters)
             np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
             optim_time = time.time() - st
@@ -504,14 +517,18 @@ if __name__ == "__main__":
             # print(-np.sort(-prob)[:5])
 
             # mi_r, ma_r = state_eval.min(), state_eval.max()
-            print(f"\n\nhere\n{idx_feasible[0].shape} {eps}\n\n")
+            # print(f"\n\nhere\n{idx_feasible[0].shape} {eps}\n\n")
             mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
             # print(optimal_expectation)
             optimal_expectation = (prob * (state_eval)).sum()
             # print(optimal_expectation)
 
-            approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
-            maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
+            # print(idx_feasible[0].shape)
+            if len(idx_feasible[0]) >= 2:
+                approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
+                maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
+            else:
+                approx_ratio, maxprob_ratio = np.nan, np.nan
             budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation())
             observe_time = time.time() - st
 
