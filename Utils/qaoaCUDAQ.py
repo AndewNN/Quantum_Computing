@@ -299,7 +299,7 @@ def get_pauli_serializable(X, Y, n_qubits):
             serializable_A.append((coeff.real, pauli_word))
         return serializable_A
         
-def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
+def basis_T_to_pauli_parallel(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
     print("Compute pauli")
     st_pauli_compute = time.time()
     A_all, B_all = 0, 0
@@ -391,6 +391,61 @@ def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[Li
             ret_c.append(final_coeff)
     print("Listing done in:", time.time() - st_list)
 
+    return ret_s, np.array(ret_c)
+
+def basis_T_to_pauli(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
+    def init_pauli(x, y):
+        if x == "0" and y == "0":
+            A = spin.i(0) + spin.z(0)
+            # B = spin.i(0) + spin.z(0)
+            B = 0
+        elif x == "0" and y == "1":
+            A = spin.x(0)
+            B = -spin.y(0)
+        elif x == "1" and y == "0":
+            A = spin.x(0)
+            B = spin.y(0)
+        elif x == "1" and y == "1":
+            A = spin.i(0) - spin.z(0)
+            # B = spin.i(0) - spin.z(0)
+            B = 0
+        return A, B
+
+    def transform_pauli(x, y, idx, A, B):
+        if x == "0" and y == "0":
+            A_, B_ = 0.5 * A * (spin.i(idx) + spin.z(idx)), 0.5 * B * (spin.i(idx) + spin.z(idx))
+        elif x == "0" and y == "1":
+            A_, B_ = 0.5 * (A * spin.x(idx) + B * spin.y(idx)), 0.5 * (B * spin.x(idx) - A * spin.y(idx))
+        elif x == "1" and y == "0":
+            A_, B_ = 0.5 * (A * spin.x(idx) - B * spin.y(idx)), 0.5 * (B * spin.x(idx) + A * spin.y(idx))
+        elif x == "1" and y == "1":
+            A_, B_ = 0.5 * A * (spin.i(idx) - spin.z(idx)), 0.5 * B * (spin.i(idx) - spin.z(idx))
+        return A_, B_
+    
+    def get_pauli(X, Y):
+        A, B = init_pauli(X[0], Y[0])
+        for i in range(1, len(X)):
+            A, B = transform_pauli(X[i], Y[i], i, A, B)
+        return A, B
+        
+    A_all, B_all = 0, 0
+    for i in range(T.shape[0]):
+        for j in range(i + 1, T.shape[1]):
+            A_now, B_now = get_pauli(bases[i], bases[j])
+            A_all += T[i, j] * A_now
+            B_all += T[i, j] * B_now
+    
+    ret_s, ret_c = [], []
+
+    for i in A_all:
+        s = i.get_pauli_word(n_qubits)
+        c = i.evaluate_coefficient()
+        if len(s) > 0 and c.real != 0:
+            # ret_s.append(pauli_to_int(s))
+            ret_s.append(s)
+            # print(s)
+            ret_c.append(c.real)
+    
     return ret_s, np.array(ret_c)
 
 def reversed_str_bases_to_init_state(bases: List[str], n_qb: int) -> np.ndarray:

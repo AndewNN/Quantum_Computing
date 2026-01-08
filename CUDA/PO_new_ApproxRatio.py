@@ -14,7 +14,7 @@ import faulthandler
 faulthandler.enable()
 sys.path.append(os.path.abspath(".."))
 from Utils.qaoaCUDAQ import po_normalize, ret_cov_to_QUBO, qubo_to_ising, process_ansatz_values, kernel_qaoa_X, find_budget, kernel_flipped,\
-    kernel_qaoa_Preserved, all_state_to_return, get_init_states, basis_T_to_pauli, reversed_str_bases_to_init_state, get_optimizer
+    kernel_qaoa_Preserved, all_state_to_return, get_init_states, basis_T_to_pauli_parallel, basis_T_to_pauli, reversed_str_bases_to_init_state, get_optimizer
 
 
 '''
@@ -384,6 +384,7 @@ if __name__ == "__main__":
                 # mixer_c = mixer_c[:250000]
                 # break
                 init_bases = reversed_str_bases_to_init_state(init_state, n_qubit)
+                print(init_bases)
 
                 ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c, init_bases)
 
@@ -404,6 +405,10 @@ if __name__ == "__main__":
             points[::2] *= mm_i
             points[1::2] *= np.pi
             print(f"Initial Parameters: {points.tolist()}")
+
+            result = cudaq.get_state(kernel_qaoa_use, points, *ansatz_fixed_param)
+            prob = np.abs(result)**2
+            print(np.sort(prob))
 
             if is_torch_optim:
                 # points_cu = torch.tensor(points, dtype=torch.float64, device=device)
@@ -522,6 +527,7 @@ if __name__ == "__main__":
             # print(optimal_expectation)
             optimal_expectation = (prob * (state_eval)).sum()
             # print(optimal_expectation)
+            print(np.sort(prob))
 
             # print(idx_feasible[0].shape)
             if len(idx_feasible[0]) >= 2:
