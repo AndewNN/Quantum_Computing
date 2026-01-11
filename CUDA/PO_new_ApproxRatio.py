@@ -321,6 +321,9 @@ if __name__ == "__main__":
             state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb)
             state_eval = all_state_to_return(n_qubit, 0.0, QU_eval)
 
+            np.save(f"./debug/QU_L1/qubo_A{N_ASSETS}_E{e}.npy", QU_lamb)
+            continue
+
 
             # np.save(f"./debug/state_return_{file_postfix}_p{LAYER}_L{f_LAMB}_q{f_Q}_A{N_ASSETS}_Q{TARGET_QUBIT}.npy", np.array(state_return))
             # print("saved")
