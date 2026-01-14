@@ -11,6 +11,7 @@ from tqdm import tqdm
 import shutil
 import argparse
 import faulthandler
+from math import sqrt
 faulthandler.enable()
 sys.path.append(os.path.abspath(".."))
 from Utils.qaoaCUDAQ import po_normalize, ret_cov_to_QUBO, qubo_to_ising, process_ansatz_values, kernel_qaoa_X, find_budget, kernel_flipped,\
@@ -48,7 +49,7 @@ if __name__ == "__main__":
     eps = [0.1]
     SHIFT = 1e-4
 
-    os.system("taskset -p 0xfffff %d" % os.getpid())
+    # os.system("taskset -p 0xfffff %d" % os.getpid())
 
     def file_copy(src, dst):
         try:
@@ -205,6 +206,7 @@ if __name__ == "__main__":
     is_torch_optim = args.torch_optim
     OVERWRITE = args.OVERWRITE
 
+    LAMB = LAMB if mode == "X" else 1.0
     assert mode in modes, f"Mode {mode} not in {modes}"
     assert len(eps) == 1 or len(eps) == len(TARGET_ASSET), "Length of eps must be 1 or equal to length of TARGET_ASSET"
     if len(eps) == 1:
@@ -310,19 +312,19 @@ if __name__ == "__main__":
                 # H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize()
                 # H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize()
                 H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize() * hamiltonian_boost
-                H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize()
+                H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize() * hamiltonian_boost
                 H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize() * hamiltonian_boost
             else:
                 H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize() * hamiltonian_boost
-                H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize()
+                H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize() * hamiltonian_boost
                 H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize() * hamiltonian_boost
 
             # state_return = all_state_to_return(n_qubit, lamb, QU)
-            state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb)
+            state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb) # lamb * |P^t x -1|^2
             state_eval = all_state_to_return(n_qubit, 0.0, QU_eval)
 
-            np.save(f"./debug/QU_L1/qubo_A{N_ASSETS}_E{e}.npy", QU_lamb)
-            continue
+            # np.save(f"./debug/QU_L1/qubo_A{N_ASSETS}_E{e}.npy", QU_lamb)
+            # continue
 
 
             # np.save(f"./debug/state_return_{file_postfix}_p{LAYER}_L{f_LAMB}_q{f_Q}_A{N_ASSETS}_Q{TARGET_QUBIT}.npy", np.array(state_return))
@@ -331,7 +333,7 @@ if __name__ == "__main__":
 
             # |P^t x -1| <= eps
             # lamb (P^t x -1)^2 <= lamb * eps^2
-            eps_t = lamb * (eps[i]) ** 2
+            eps_t = (eps[i]) ** 2
             idx_feasible = np.where(np.abs(state_penalty) <= eps_t)
 
             # direct compute
@@ -407,11 +409,11 @@ if __name__ == "__main__":
             points = np.random.uniform(-1, 1, (parameter_count))
             points[::2] *= mm_i
             points[1::2] *= np.pi
-            print(f"Initial Parameters: {points.tolist()}")
+            # print(f"Initial Parameters: {points.tolist()}")
 
-            result = cudaq.get_state(kernel_qaoa_use, points, *ansatz_fixed_param)
-            prob = np.abs(result)**2
-            print(np.sort(prob))
+            # result = cudaq.get_state(kernel_qaoa_use, points, *ansatz_fixed_param)
+            # prob = np.abs(result)**2
+            # print(np.sort(prob))
 
             if is_torch_optim:
                 # points_cu = torch.tensor(points, dtype=torch.float64, device=device)
@@ -422,10 +424,11 @@ if __name__ == "__main__":
                 # optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.9, 0.999), weight_decay=0)
                 # optimizer_cu = AdamW([points_cu], lr=0.01)
 
-                # scheduler_cu = CosineAnnealingWarmRestarts(optimizer_cu, T_0=30, T_mult=2)
+                scheduler_co = CosineAnnealingWarmRestarts(optimizer_cu, T_0=300, T_mult=2)
                 scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.987)
                 scheduler_warmup = CyclicLR(optimizer_cu, base_lr=0.01, max_lr=0.012, step_size_up=10, step_size_down=10, mode='triangular2')
-                scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_cu], milestones=[40])
+                # scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_cu], milestones=[40])
+                scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_co], milestones=[40])
                 # scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr= 1e-5)
                 FIND_GRAD = True
                 max_iter = 210 # 30 + 60 + 120
@@ -446,7 +449,8 @@ if __name__ == "__main__":
                         # print("in cal 1")
                         exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation())
                         # print("in cal 2")
-                        exp_return_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, parameters, *ansatz_fixed_param).expectation())
+                        exp_return_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                        exp_return_violate = sqrt(exp_return_lamb / lamb)
                         expectations.append([exp_return / hamiltonian_boost, exp_return_eval / hamiltonian_boost, exp_return_lamb, parameters[0], parameters[1]])
                     return exp_return
 
@@ -478,7 +482,8 @@ if __name__ == "__main__":
                         expectation_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, params.cpu().numpy(), *ansatz_fixed_param).expectation())
                     else:
                         expectation_eval = expectation
-                    expectation_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, params.cpu().numpy(), *ansatz_fixed_param).expectation())
+                    expectation_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, params.cpu().numpy(), *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                    expectation_violate = sqrt(expectation_lamb / lamb)
                     grad = torch.zeros_like(params)
                     # print(grad.dtype)
                     for j in range(parameter_count):
@@ -530,7 +535,7 @@ if __name__ == "__main__":
             # print(optimal_expectation)
             optimal_expectation = (prob * (state_eval)).sum()
             # print(optimal_expectation)
-            print(np.sort(prob))
+            # print(np.sort(prob))
 
             # print(idx_feasible[0].shape)
             if len(idx_feasible[0]) >= 2:
@@ -538,7 +543,7 @@ if __name__ == "__main__":
                 maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
             else:
                 approx_ratio, maxprob_ratio = np.nan, np.nan
-            budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation())
+            budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
             observe_time = time.time() - st
 
             # remove row such that Assets and Exp match
