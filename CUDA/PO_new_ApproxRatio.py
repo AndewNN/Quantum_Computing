@@ -323,6 +323,13 @@ if __name__ == "__main__":
             state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb) # lamb * |P^t x -1|^2
             state_eval = all_state_to_return(n_qubit, 0.0, QU_eval)
 
+            state_optim = -all_state_to_return(n_qubit, *((lamb, QU) if mode == "X" else (0.0, QU_eval)))
+            idx_bestt = np.argmin(state_eval)
+            best_vall = state_optim[idx_bestt]
+            print(state_optim.min(), state_optim.max())
+            # print(best_vall)
+            continue
+
             # np.save(f"./debug/QU_L1/qubo_A{N_ASSETS}_E{e}.npy", QU_lamb)
             # continue
 
