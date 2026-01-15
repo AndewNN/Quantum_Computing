@@ -22,7 +22,7 @@ report_col = ["Exp", "Assets", "Qubits", "N", "Sum_1", "Sum_2", "Coeff", "Budget
 N = 2000
 TARGET_QUBIT_IN = 3
 TARGET_ASSET = [3, 4, 5, 6, 7]
-min_P, max_P = 125, 250
+min_P, max_P = 95, 190
 Z = None
 modes = ["X", "Preserving"]
 
@@ -112,6 +112,13 @@ def parse_argss():
         help="Number of preserving bases (int)"
     )
 
+    # Overwrite old results rather than skipping
+    parser.add_argument(
+        "--OVERWRITE",
+        action="store_true", default=False,
+        help="Overwrite old results rather than skipping"
+    )
+
     return parser.parse_args()
 
 args = parse_argss()
@@ -127,13 +134,19 @@ Z = args.basis
 E = args.exp
 mode = args.mode
 num_init_bases = args.bases
+OVERWRITE = args.OVERWRITE
 
 assert mode in modes, f"Mode {mode} not in {modes}"
 
 # Dataset
 data_cov_pd = pd.read_csv("../dataset/top_50_us_stocks_data_20250526_011226_covariance.csv")
 data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
-# print(data_cov.shape, data_ret_p.shape)
+# print(np.sort(data_ret_p_pd["Price"]))
+
+data_ret_p_pd = data_ret_p_pd[(data_ret_p_pd["Price"] > min_P) & (data_ret_p_pd["Price"] < max_P)].reset_index(drop=True)
+data_cov_pd = data_cov_pd.loc[data_cov_pd["Ticker"].isin(data_ret_p_pd["Ticker"])].reset_index(drop=True)
+# print(data_cov_pd.shape, data_ret_p_pd.shape) 
+# exit(0)
 
 f_Q = Q if not Q.is_integer() else int(Q)
 f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
@@ -151,7 +164,7 @@ for e in pbar_all:
     for i, N_ASSETS in pbar:
         df_now = pd.read_csv(f"{dir_path}/{file_name}") if os.path.exists(f"{dir_path}/{file_name}") else None
         # print("\nhere\n")
-        if df_now is not None:
+        if df_now is not None and not OVERWRITE:
             if df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
                 if df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), "N"].values[0] >= N:
                     continue
@@ -159,9 +172,9 @@ for e in pbar_all:
                     it_st, sum_1, sum_2 = df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), ["N", "Sum_1", "Sum_2"]].values[0]
                     it_st = int(it_st)
             else:
-                df_now.loc[-1] = [e, N_ASSETS, n_qubit, 0, 0.0, 0.0, 0.0, B]
+                df_now.loc[-1] = [e, N_ASSETS, TARGET_QUBIT_IN * N_ASSETS, 0, 0.0, 0.0, 0.0, 0.0]
         else:
-            df_now = pd.DataFrame(np.array([e, N_ASSETS, TARGET_QUBIT, 0, 0.0, 0.0, 0.0, B])[None, :], columns=report_col)
+            df_now = pd.DataFrame(np.array([e, N_ASSETS, TARGET_QUBIT_IN * N_ASSETS, 0, 0.0, 0.0, 0.0, 0.0])[None, :], columns=report_col)
 
         np.random.seed(911 + 991 * e + 997 * N_ASSETS)
         state = np.random.get_state()
@@ -177,10 +190,10 @@ for e in pbar_all:
 
         # print(data_cov.shape)
 
-        np.random.set_state(state)
-        selected_price = np.random.uniform(125, 250, N_ASSETS)
-        price_factor = selected_price / data_p
-        data_p = selected_price
+        # np.random.set_state(state)
+        # selected_price = np.random.uniform(125, 250, N_ASSETS)
+        # price_factor = selected_price / data_p
+        # data_p = selected_price
         # data_ret = data_ret * price_factor
         # data_cov = (price_factor[None, :] * data_cov) * price_factor[:, None]
 

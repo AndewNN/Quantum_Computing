@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     TARGET_QUBIT_IN = 3
     TARGET_ASSET = [3, 4, 5, 6, 7]
-    min_P, max_P = 125, 250
+    min_P, max_P = 95, 190
     hamiltonian_X_boost = 7500
     hamiltonian_P_boost = 7500
     modes = ["X", "Preserving"]
@@ -172,7 +172,6 @@ if __name__ == "__main__":
             help="Use pytorch optimizer (bool) e.g. --torch_optim True or --torch_optim False"
         )
 
-        
         # Overwrite old results rather than skipping
         parser.add_argument(
             "--OVERWRITE",
@@ -224,7 +223,12 @@ if __name__ == "__main__":
     # Dataset
     data_cov_pd = pd.read_csv("../dataset/top_50_us_stocks_data_20250526_011226_covariance.csv")
     data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
-    # print(data_cov.shape, data_ret_p.shape)
+    # print(np.sort(data_ret_p_pd["Price"]))
+
+    data_ret_p_pd = data_ret_p_pd[(data_ret_p_pd["Price"] > min_P) & (data_ret_p_pd["Price"] < max_P)].reset_index(drop=True)
+    data_cov_pd = data_cov_pd.loc[data_cov_pd["Ticker"].isin(data_ret_p_pd["Ticker"])].reset_index(drop=True)
+    # print(data_cov_pd.shape, data_ret_p_pd.shape) 
+    # exit(0)
 
     # experiments_approx_Q3/exp_p5_L0.001_q1\
     #                                        |- report_X_boost_1.csv
@@ -282,10 +286,10 @@ if __name__ == "__main__":
 
             # print(data_cov.shape)
 
-            np.random.set_state(state)
-            selected_price = np.random.uniform(125, 250, N_ASSETS)
-            price_factor = selected_price / data_p
-            data_p = selected_price
+            # np.random.set_state(state)
+            # selected_price = np.random.uniform(125, 250, N_ASSETS)
+            # price_factor = selected_price / data_p
+            # data_p = selected_price
 
             np.random.set_state(state)
             weighted = np.random.uniform(0, 1)
