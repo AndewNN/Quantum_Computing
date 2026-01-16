@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # Assume that already set CUDA_VISIBLE_DEVICES
     device = torch.device("cuda:0")
 
-    report_col = ["Assets", "Exp", "Qubits", "Approximate_ratio", "Budget_Violations", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "observe_time"]
+    report_col = ["Assets", "Exp", "Qubits", "Approximate_ratio", "Budget_Violations", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "epochs", "observe_time"]
 
     TARGET_QUBIT_IN = 3
     TARGET_ASSET = [3, 4, 5, 6, 7]
@@ -48,6 +48,7 @@ if __name__ == "__main__":
     modes = ["X", "Preserving"]
     eps = [0.1]
     SHIFT = 1e-4
+    F_TOL = 1e-4
 
     # os.system("taskset -p 0xfffff %d" % os.getpid())
 
@@ -179,6 +180,13 @@ if __name__ == "__main__":
             help="Overwrite old results rather than skipping"
         )
 
+        # absolute tolerance for convergence
+        parser.add_argument(
+            "--f_tol",
+            type=float, default=F_TOL,
+            help="Absolute tolerance for convergence (float)"
+        )
+
         return parser.parse_args()
 
     args = parse_argss()
@@ -204,6 +212,7 @@ if __name__ == "__main__":
     is_dir = not args.no_dir
     is_torch_optim = args.torch_optim
     OVERWRITE = args.OVERWRITE
+    F_TOL = args.f_tol
 
     LAMB = LAMB if mode == "X" else 1.0
     assert mode in modes, f"Mode {mode} not in {modes}"
@@ -327,12 +336,12 @@ if __name__ == "__main__":
             state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb) # lamb * |P^t x -1|^2
             state_eval = all_state_to_return(n_qubit, 0.0, QU_eval)
 
-            state_optim = -all_state_to_return(n_qubit, *((lamb, QU) if mode == "X" else (0.0, QU_eval)))
-            idx_bestt = np.argmin(state_eval)
-            best_vall = state_optim[idx_bestt]
-            print(state_optim.min(), state_optim.max())
-            # print(best_vall)
-            continue
+            # state_optim = -all_state_to_return(n_qubit, *((lamb, QU) if mode == "X" else (0.0, QU_eval)))
+            # idx_bestt = np.argmin(state_eval)
+            # best_vall = state_optim[idx_bestt]
+            # print(state_optim.min(), state_optim.max())
+            # # print(best_vall)
+            # continue
 
             # np.save(f"./debug/QU_L1/qubo_A{N_ASSETS}_E{e}.npy", QU_lamb)
             # continue
@@ -414,7 +423,7 @@ if __name__ == "__main__":
             idx = 3
             if not is_torch_optim:
                 optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
-                optimizer.max_iterations = 210
+                optimizer.max_iterations = 300
                 # print(f"\noptim iter: {optimizer.max_iterations}\noptim eps: {optimizer.eps}")
             np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS)
             points = np.random.uniform(-1, 1, (parameter_count))
@@ -442,7 +451,7 @@ if __name__ == "__main__":
                 scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_co], milestones=[40])
                 # scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr= 1e-5)
                 FIND_GRAD = True
-                max_iter = 210 # 30 + 60 + 120
+                max_iter = 300
 
             init_2_time = time.time() - st
 
@@ -450,6 +459,8 @@ if __name__ == "__main__":
                 pbar_exp.set_description("optim  ")
             # print("start optimization")
             st = time.time()
+            num_iter = 0
+            last_f = None
             expectations = []
             if not is_torch_optim:
                 def cost_func(parameters, cal_expectation=False):
@@ -457,7 +468,10 @@ if __name__ == "__main__":
                     exp_return = float(cudaq.observe(kernel_qaoa_use, H_ansatz, parameters, *ansatz_fixed_param).expectation())
                     # print("in 2")
                     if cal_expectation:
+                        # if last_f is not None and abs(exp_return - last_f) < F_TOL:
+                        #     raise cudaq.optimization.StopOptimization("Converged")
                         # print("in cal 1")
+                        num_iter += 1
                         exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation())
                         # print("in cal 2")
                         exp_return_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
@@ -489,6 +503,12 @@ if __name__ == "__main__":
                     optimizer_cu.zero_grad()
                     params = points_cu.detach().clone()
                     expectation = float(cudaq.observe(kernel_qaoa_use, H_ansatz, params.cpu().numpy(), *ansatz_fixed_param).expectation())
+                    # if last_f is not None:
+                    #     print(abs(expectation - last_f))
+                    if it > 3 and last_f is not None and abs(expectation - last_f) < F_TOL:
+                        break
+                    last_f = expectation
+                    num_iter += 1
                     if mode == "X":
                         expectation_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, params.cpu().numpy(), *ansatz_fixed_param).expectation())
                     else:
@@ -561,7 +581,7 @@ if __name__ == "__main__":
             df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e))]
             
 
-            df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, budget_violation, maxprob_ratio, init_1_time, init_2_time, optim_time, observe_time]
+            df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, budget_violation, maxprob_ratio, init_1_time, init_2_time, optim_time, num_iter, observe_time]
             df_now.sort_values(by=["Assets", "Exp"], inplace=True)
             df_now.reset_index(drop=True, inplace=True)
             df_now.to_csv(f"{dir_path}/{report_name}", index=False)
