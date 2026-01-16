@@ -10,3 +10,5 @@ Reports/
 .vscode/
 CUDA/experiments*
 CUDA/results*
+Utils/build*
+MyLib/*
