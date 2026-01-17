@@ -305,6 +305,9 @@ if __name__ == "__main__":
             B_mi, B_ma = find_budget(TARGET_QUBIT_IN * N_ASSETS, data_p, min_P, max_P, min_mix_mode=True)
             B = B_mi * weighted + B_ma * (1 - weighted)
 
+            # print("\n", data_p)
+            # print(B)
+            # break
             P = data_p[:N_ASSETS]
             ret = data_ret[:N_ASSETS]
             cov = data_cov[:N_ASSETS, :N_ASSETS]
@@ -409,7 +412,7 @@ if __name__ == "__main__":
                 # mixer_c = mixer_c[:250000]
                 # break
                 init_bases = reversed_str_bases_to_init_state(init_state, n_qubit)
-                print(init_bases)
+                # print(init_bases)
 
                 ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c, init_bases)
 
@@ -436,6 +439,7 @@ if __name__ == "__main__":
             # print(np.sort(prob))
 
             if is_torch_optim:
+                max_iter = 300
                 # points_cu = torch.tensor(points, dtype=torch.float64, device=device)
                 points_cu = torch.tensor(np.zeros_like(points), dtype=torch.float64, device=device)
 
@@ -444,14 +448,15 @@ if __name__ == "__main__":
                 # optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.9, 0.999), weight_decay=0)
                 # optimizer_cu = AdamW([points_cu], lr=0.01)
 
-                scheduler_co = CosineAnnealingWarmRestarts(optimizer_cu, T_0=300, T_mult=2)
+                # scheduler_co = CosineAnnealingWarmRestarts(optimizer_cu, T_0=300, T_mult=2)
+                scheduler_co = CosineAnnealingLR(optimizer_cu, T_max=max_iter, eta_min=0.0003)
                 scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.987)
                 scheduler_warmup = CyclicLR(optimizer_cu, base_lr=0.01, max_lr=0.012, step_size_up=10, step_size_down=10, mode='triangular2')
                 # scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_cu], milestones=[40])
-                scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_co], milestones=[40])
+                # scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_co], milestones=[40])
+                scheduler_all = scheduler_co
                 # scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr= 1e-5)
                 FIND_GRAD = True
-                max_iter = 300
 
             init_2_time = time.time() - st
 
@@ -461,6 +466,7 @@ if __name__ == "__main__":
             st = time.time()
             num_iter = 0
             last_f = None
+            cou_con = 0
             expectations = []
             if not is_torch_optim:
                 def cost_func(parameters, cal_expectation=False):
@@ -505,9 +511,6 @@ if __name__ == "__main__":
                     expectation = float(cudaq.observe(kernel_qaoa_use, H_ansatz, params.cpu().numpy(), *ansatz_fixed_param).expectation())
                     # if last_f is not None:
                     #     print(abs(expectation - last_f))
-                    if it > 3 and last_f is not None and abs(expectation - last_f) < F_TOL:
-                        break
-                    last_f = expectation
                     num_iter += 1
                     if mode == "X":
                         expectation_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, params.cpu().numpy(), *ansatz_fixed_param).expectation())
@@ -532,6 +535,14 @@ if __name__ == "__main__":
                     scheduler_all.step()
                     # print(points_cu[0].item(), points_cu[1].item())
                     expectations.append([expectation/hamiltonian_boost, expectation_eval/hamiltonian_boost, expectation_lamb, points_cu[0].item(), points_cu[1].item()])
+                    # if it > 3 and last_f is not None and abs(expectation - last_f) < F_TOL:
+                    #     break
+                    
+                    cou_con = cou_con + 1 if last_f is not None and abs(expectation - last_f) < F_TOL else 0
+                    if cou_con >= 3:
+                        break
+                    last_f = expectation
+                    
                     # if optimal_expectation is None or optimal_expectation > expectation_eval:
                     #     optimal_expectation = expectation_eval
                     #     optimal_parameters = points_cu.cpu().numpy()
