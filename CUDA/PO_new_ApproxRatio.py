@@ -43,8 +43,8 @@ if __name__ == "__main__":
     TARGET_QUBIT_IN = 3
     TARGET_ASSET = [3, 4, 5, 6, 7]
     min_P, max_P = 95, 190
-    hamiltonian_X_boost = 7500
-    hamiltonian_P_boost = 7500
+    hamiltonian_X_boost = 7500.0
+    hamiltonian_P_boost = 7500.0
     modes = ["X", "Preserving"]
     eps = [0.1]
     SHIFT = 1e-4
@@ -134,15 +134,15 @@ if __name__ == "__main__":
         # Hamiltonian boost for X mixer
         parser.add_argument(
             "-b_X", "--ham_boost_X",
-            type=int, default=hamiltonian_X_boost,
-            help="Hamiltonian boost for X mixer (int)"
+            type=float, default=hamiltonian_X_boost,
+            help="Hamiltonian boost for X mixer (float)"
         )
 
         # Hamiltonian boost for Preserving mixer
         parser.add_argument(
             "-b_P", "--ham_boost_P",
-            type=int, default=hamiltonian_P_boost,
-            help="Hamiltonian boost for Preserving mixer (int)"
+            type=float, default=hamiltonian_P_boost,
+            help="Hamiltonian boost for Preserving mixer (float)"
         )
 
         # epsilon for budget feasible set for each Asset
@@ -213,6 +213,9 @@ if __name__ == "__main__":
     is_torch_optim = args.torch_optim
     OVERWRITE = args.OVERWRITE
     F_TOL = args.f_tol
+
+    hamiltonian_P_boost = hamiltonian_P_boost if not hamiltonian_P_boost.is_integer() else int(hamiltonian_P_boost)
+    hamiltonian_X_boost = hamiltonian_X_boost if not hamiltonian_X_boost.is_integer() else int(hamiltonian_X_boost)
 
     LAMB = LAMB if mode == "X" else 1.0
     assert mode in modes, f"Mode {mode} not in {modes}"
