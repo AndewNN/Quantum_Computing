@@ -164,6 +164,7 @@ for e in pbar_all:
     for i, N_ASSETS in pbar:
         df_now = pd.read_csv(f"{dir_path}/{file_name}") if os.path.exists(f"{dir_path}/{file_name}") else None
         # print("\nhere\n")
+        it_st, sum_1, sum_2 = 0, 0.0, 0.0
         if df_now is not None and not OVERWRITE:
             if df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
                 if df_now.loc[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e), "N"].values[0] >= N:
@@ -272,7 +273,6 @@ for e in pbar_all:
             mm_p = np.min(np.abs(mixer_c)) if len(mixer_c) > 0 else 1e9
         mm_i = np.pi / min(mm_1, mm_2, mm_p)
 
-        it_st, sum_1, sum_2 = 0, 0.0, 0.0
         # np.random.set_state(rand_state)
         np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS)
         points = np.random.uniform(-1, 1, (N, parameter_count))

@@ -265,14 +265,18 @@ if __name__ == "__main__":
     # if __name__ == "__main__":
         # from multiprocessing import freeze_support
         # freeze_support()
-    if is_pbar:
-        pbar_A = tqdm(TARGET_ASSET)
-    # for i, N_ASSETS in enumerate(pbar_A):
-    for i, N_ASSETS in (enumerate(TARGET_ASSET) if not is_pbar else enumerate(pbar_A)):
+    # if is_pbar:
+    #     pbar_A = tqdm(TARGET_ASSET)
+    # # for i, N_ASSETS in enumerate(pbar_A):
+    # for i, N_ASSETS in (enumerate(TARGET_ASSET) if not is_pbar else enumerate(pbar_A)):
+    pbar_A = tqdm(TARGET_ASSET, disable=not is_pbar)
+    for i, N_ASSETS in enumerate(pbar_A):
         if is_pbar:
             pbar_A.set_description(f"Assets {N_ASSETS}")
-            pbar_exp = tqdm(range(E_st, E), leave=False)
-        for e in (range(E_st, E) if not is_pbar else pbar_exp):
+            # pbar_exp = tqdm(range(E_st, E), leave=False)
+        # for e in (range(E_st, E) if not is_pbar else pbar_exp):
+        pbar_exp = tqdm(range(E_st, E), leave=False, disable=not is_pbar)
+        for e in pbar_exp:
         # for e in range(E):
             df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else None
             if df_now is not None:
@@ -407,10 +411,11 @@ if __name__ == "__main__":
                 T[0, -1] = T[-1, 0] = 1.0
                 # print(T)
                 st_pauli = time.time()
-                mixer_s, mixer_c = basis_T_to_pauli(init_state, T, n_qubit)
+                # mixer_s, mixer_c = basis_T_to_pauli(init_state, T, n_qubit)
+                mixer_s, mixer_c = basis_T_to_pauli_parallel(init_state, T, n_qubit)
                 # print("num pauli string (1 layer):", len(mixer_s))
                 # print("time:", time.time() - st_pauli)
-                # break
+                # assert False
                 # mixer_s = mixer_s[:250000]
                 # mixer_c = mixer_c[:250000]
                 # break
@@ -506,9 +511,11 @@ if __name__ == "__main__":
             
             if is_torch_optim:
                 optimal_expectation, optimal_parameters = None, None
-                if is_pbar:
-                    pbar_optim = tqdm(range(max_iter), leave=False)
-                for it in (range(max_iter) if not is_pbar else pbar_optim):
+                # if is_pbar:
+                #     pbar_optim = tqdm(range(max_iter), leave=False)
+                # for it in (range(max_iter) if not is_pbar else pbar_optim):
+                pbar_optim = tqdm(range(max_iter), leave=False, disable=not is_pbar)
+                for it in pbar_optim:
                     optimizer_cu.zero_grad()
                     params = points_cu.detach().clone()
                     expectation = float(cudaq.observe(kernel_qaoa_use, H_ansatz, params.cpu().numpy(), *ansatz_fixed_param).expectation())
@@ -590,6 +597,9 @@ if __name__ == "__main__":
                 approx_ratio, maxprob_ratio = np.nan, np.nan
             budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
             observe_time = time.time() - st
+
+            # update df_now for simultaneously run experiments
+            df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else pd.DataFrame(columns=report_col)
 
             # remove row such that Assets and Exp match
             df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e))]
