@@ -41,4 +41,10 @@ total_bits = sum(asset_bit_lengths)
 
 quantities = ga_solver.decode_chromosome_to_quantities(best_solution.chromosome, asset_bit_lengths, total_bits)
 
+quantt = ga_solver.decode_chromosome_to_quantities(top_inv[23].chromosome, asset_bit_lengths, total_bits)
+
 top_inv_gt = ga.get_top_n_brute_force_individuals(24, False)
+
+quantities = np.array(quantt)
+budd = np.dot(quantities, np.array(prices))
+print(np.abs(budd - budget) / budget)
