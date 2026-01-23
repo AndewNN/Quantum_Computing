@@ -45,8 +45,8 @@ public:
         elitism_count(elitism_count),
         tournament_size(tournament_size),
         total_bits(0),
-        rng(std::random_device{}())
-        // rng(42)
+        // rng(std::random_device{}())
+        rng(919)
     {
         start_ga = clk::now();
         if (prices.empty() || prices.size() != asset_bit_lengths.size()) {
