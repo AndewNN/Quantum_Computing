@@ -275,7 +275,7 @@ def get_pauli(X, Y):
     A, B = init_pauli(X[0], Y[0])
     for i in range(1, len(X)):
         A, B = transform_pauli(X[i], Y[i], i, A, B)
-    print(f"Done by thread    : '{threading.current_thread().name}'")
+    # print(f"Done by thread    : '{threading.current_thread().name}'")
     return A
 
 def _get_pauli_objects(X, Y):
@@ -297,10 +297,10 @@ def get_pauli_serializable(X, Y, n_qubits):
         pauli_word = term.get_pauli_word(n_qubits)
         if coeff.real != 0 and len(pauli_word) > 0:
             serializable_A.append((coeff.real, pauli_word))
-        return serializable_A
+    return serializable_A
         
 def basis_T_to_pauli_parallel(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
-    print("Compute pauli")
+    # print("Compute pauli")
     st_pauli_compute = time.time()
     A_all, B_all = 0, 0
     cou = 0
@@ -344,12 +344,12 @@ def basis_T_to_pauli_parallel(bases: List[str], T: np.ndarray, n_qubits: int) ->
     
     with Pool(processes=max_processes) as pool:
         chunksize = max(1, len(indices) // max_processes)
-        print("Working with chunksize:", chunksize)
+        # print("Working with chunksize:", chunksize)
         results = pool.starmap(worker_func, indices_bases, chunksize=chunksize)
 
-    print("Pauli compute:", time.time() - st_pauli_compute)
+    # print("Pauli compute:", time.time() - st_pauli_compute)
 
-    print("Start merging...")
+    # print("Start merging...")
     st_merge = time.time()
     """
     for idx, (i, j) in enumerate(indices):
@@ -381,7 +381,7 @@ def basis_T_to_pauli_parallel(bases: List[str], T: np.ndarray, n_qubits: int) ->
         for coeff, pauli_word in serializable_A:
             summed_terms[pauli_word] += T_val * coeff
 
-    print("Merge done in:", time.time() - st_merge)
+    # print("Merge done in:", time.time() - st_merge)
 
     st_list = time.time()
     ret_s, ret_c = [], []
@@ -389,7 +389,7 @@ def basis_T_to_pauli_parallel(bases: List[str], T: np.ndarray, n_qubits: int) ->
         if final_coeff != 0:
             ret_s.append(pauli_word)
             ret_c.append(final_coeff)
-    print("Listing done in:", time.time() - st_list)
+    # print("Listing done in:", time.time() - st_list)e
 
     return ret_s, np.array(ret_c)
 
