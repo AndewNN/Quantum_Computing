@@ -16,11 +16,16 @@ typedef std::chrono::steady_clock clk;
 
 struct Individual {
     std::vector<bool> chromosome;
+    // std::vector<int> quantities;
     double fitness = -1.0; // Cost function value
     double total_cost = -1.0; // price of bitstring
 
     bool operator<(const Individual& other) const {
-        return fitness < other.fitness;
+        if (fitness != other.fitness)
+            return fitness < other.fitness;
+        if (total_cost != other.total_cost)
+            return total_cost < other.total_cost;
+        return chromosome < other.chromosome;
     }
 };
 
@@ -45,8 +50,8 @@ public:
         elitism_count(elitism_count),
         tournament_size(tournament_size),
         total_bits(0),
-        // rng(std::random_device{}())
-        rng(919)
+        rng(std::random_device{}())
+        // rng(919)
     {
         start_ga = clk::now();
         if (prices.empty() || prices.size() != asset_bit_lengths.size()) {
