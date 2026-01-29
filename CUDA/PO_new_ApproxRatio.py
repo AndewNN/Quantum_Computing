@@ -42,7 +42,9 @@ if __name__ == "__main__":
 
     TARGET_QUBIT_IN = 3
     TARGET_ASSET = [3, 4, 5, 6, 7]
-    min_P, max_P = 95, 190
+    # min_P, max_P = 95, 190
+    min_P, max_P = 108, 216
+    # min_P, max_P = 200, 400
     hamiltonian_X_boost = 7500.0
     hamiltonian_P_boost = 7500.0
     modes = ["X", "Preserving"]
@@ -259,6 +261,7 @@ if __name__ == "__main__":
     data_cov_pd = pd.read_csv("../dataset/top_50_us_stocks_data_20250526_011226_covariance.csv")
     data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
     # print(np.sort(data_ret_p_pd["Price"]))
+    # exit(0)
 
     data_ret_p_pd = data_ret_p_pd[(data_ret_p_pd["Price"] > min_P) & (data_ret_p_pd["Price"] < max_P)].reset_index(drop=True)
     data_cov_pd = data_cov_pd.loc[data_cov_pd["Ticker"].isin(data_ret_p_pd["Ticker"])].reset_index(drop=True)
@@ -316,13 +319,22 @@ if __name__ == "__main__":
             state = np.random.get_state()
             # asset_idx = np.random.choice(data_cov_pd.shape[0], max(TARGET_ASSET), replace=False)
             asset_idx = np.random.choice(data_cov_pd.shape[0], N_ASSETS, replace=False)
+            # print(asset_idx)
+            # asset_idx = np.array([0, 18, 27, 32, 41])
+            # data_cov = data_cov_pd.drop("Ticker", axis=1)
             data_cov = data_cov_pd.drop("Ticker", axis=1).to_numpy()[asset_idx, :][:, asset_idx]
-            stock_names = data_ret_p_pd["Ticker"].to_numpy()[asset_idx]
+            stock_names = data_ret_p_pd["Company_Name"].to_numpy()[asset_idx]
             # print("Selected Stocks: ", stock_names)
-            data_ret_p = data_ret_p_pd.drop("Ticker", axis=1).to_numpy()[asset_idx, :]
+            data_ret_p = data_ret_p_pd.drop("Ticker", axis=1)
+            data_ret_p = data_ret_p.drop("Company_Name", axis=1).to_numpy()[asset_idx, :]
 
             data_ret = data_ret_p[:, 0]
             data_p = data_ret_p[:, 1]
+
+            # print(data_p.tolist())
+            # print(data_ret.tolist())
+            # print(data_cov.tolist())
+            # print(stock_names)
 
 
             # print(data_cov.shape)
@@ -337,8 +349,10 @@ if __name__ == "__main__":
             B_mi, B_ma = find_budget(TARGET_QUBIT_IN * N_ASSETS, data_p, min_P, max_P, min_mix_mode=True)
             B = B_mi * weighted + B_ma * (1 - weighted)
 
+
             # print(data_ret)
             # print(B)
+            # break
             # print(data_p)
             # break
             # print("\n", data_p)
@@ -429,7 +443,7 @@ if __name__ == "__main__":
             H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize() * hamiltonian_boost
             H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize() * hamiltonian_boost
             H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize() * hamiltonian_boost
-            H_return = -qubo_to_ising(QU_return, 0.0).canonicalize() * hamiltonian_boost
+            H_return = qubo_to_ising(QU_return, 0.0).canonicalize() * hamiltonian_boost
             H_risk = -qubo_to_ising(QU_risk, 0.0).canonicalize() * hamiltonian_boost
 
 
