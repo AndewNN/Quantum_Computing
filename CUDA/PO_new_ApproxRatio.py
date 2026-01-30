@@ -288,7 +288,9 @@ if __name__ == "__main__":
     # exit(0)
 
     data_ret_p_pd = data_ret_p_pd[(data_ret_p_pd["Price"] > min_P) & (data_ret_p_pd["Price"] < max_P)]
+
     data_cov_pd = data_cov_pd.loc[data_cov_pd["Ticker"].isin(data_ret_p_pd["Ticker"])].reset_index(drop=True)
+    data_cov_pd = data_cov_pd[["Ticker"] + data_cov_pd["Ticker"].tolist()]
     # print(data_cov_pd.shape, data_ret_p_pd.shape) 
     # exit(0)
 
@@ -359,6 +361,7 @@ if __name__ == "__main__":
             data_ret = data_ret_p[:, 0]
             data_p = data_ret_p[:, 1]
 
+            # print(data_cov)
             # print(data_p.tolist())
             # print(data_ret.tolist())
             # print(data_cov.tolist())
@@ -376,7 +379,7 @@ if __name__ == "__main__":
             curr_expect[f'A{N_ASSETS}_E{e}_cov'] = data_cov
             curr_expect[f'A{N_ASSETS}_E{e}_idx'] = asset_idx_raw
             np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
-
+            # continue
 
             # print(data_cov.shape)
 
