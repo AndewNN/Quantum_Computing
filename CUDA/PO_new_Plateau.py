@@ -145,6 +145,7 @@ data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
 
 data_ret_p_pd = data_ret_p_pd[(data_ret_p_pd["Price"] > min_P) & (data_ret_p_pd["Price"] < max_P)].reset_index(drop=True)
 data_cov_pd = data_cov_pd.loc[data_cov_pd["Ticker"].isin(data_ret_p_pd["Ticker"])].reset_index(drop=True)
+data_cov_pd = data_cov_pd[["Ticker"] + data_cov_pd["Ticker"].tolist()]
 # print(data_cov_pd.shape, data_ret_p_pd.shape) 
 # exit(0)
 
