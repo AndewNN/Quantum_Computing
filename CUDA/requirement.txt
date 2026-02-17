@@ -1,0 +1,6 @@
+cuda-quantum-cu12
+torch
+pandas
+tqdm
+pybind11
+psutil
