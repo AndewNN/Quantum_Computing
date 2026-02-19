@@ -225,6 +225,13 @@ if __name__ == "__main__":
             help="Run one BF instance for debugging"
         )
 
+        # Best bases for Preserving mixer
+        parser.add_argument(
+            "--BEST_BASES",
+            action="store_true", default=False,
+            help="Use best bases for Preserving mixer"
+        )
+
         return parser.parse_args()
 
     args = parse_argss()
@@ -255,6 +262,7 @@ if __name__ == "__main__":
     DEBUG_GA = args.DEBUG_GA
     DUPLICATE_ASSET = args.DUPLICATE_ASSET
     DEBUG_BF = args.DEBUG_BF
+    BEST_BASES = args.BEST_BASES
 
     is_GA = args.GA
     population_size = 2000
@@ -305,7 +313,7 @@ if __name__ == "__main__":
     f_Q = Q if not Q.is_integer() else int(Q)
     f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
     dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}{'_torch' if is_torch_optim else ''}"
-    dir_path = f"./experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else ''}/{dir_name}"
+    dir_path = f"./experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else ''}{'_bestbases' if BEST_BASES else ''}/{dir_name}"
     file_postfix = f"{mode}{'' if mode == 'X' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost}"
     file_postfix += ("_GA" if mode == "Preserving" and is_GA else "")
     report_name = f"report_{file_postfix}.csv"
@@ -400,6 +408,7 @@ if __name__ == "__main__":
             # break
             # print("\n", data_p)
             # break
+            mean12_eps_GA, mean24_eps_GA = 0, 0
             if is_GA:
                 mutation_rate = 1.5 / (N_ASSETS * TARGET_QUBIT_IN)
                 ga = ga_solver.GeneticAlgorithm(
@@ -461,6 +470,7 @@ if __name__ == "__main__":
                             # all_diff_bf += np.abs(budd_gt - B) / B
                     mean24_eps_GA = all_diff_ga / 24
                     mean24_eps_BF = all_diff_bf / 24
+                # print(mean12_eps_GA, mean24_eps_GA)
 
 
 
@@ -481,15 +491,17 @@ if __name__ == "__main__":
                 TARGET_QUBIT = n_qubit
                 # print(f"Assets: {N_ASSETS}, Qubits: {n_qubit}")
 
+                # QUBOs of MAX PROBLEM
                 QU = ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, lamb, q)
                 QU_eval = ret_cov_to_QUBO(ret_bb, cov_bb, P_bb, 0.0, q)
-                QU_return = ret_cov_to_QUBO(ret_bb, np.zeros_like(cov_bb), P_bb, 0.0, 0.0)
+                QU_return = ret_cov_to_QUBO(ret_bb, np.zeros_like(cov_bb), np.zeros_like(P_bb), 0.0, 0.0)
                 QU_risk = ret_cov_to_QUBO(np.zeros_like(ret_bb), cov_bb, np.zeros_like(P_bb), 0.0, q)
 
+                # Hamiltonians of MIN PROBLEM
                 H_ansatz = -qubo_to_ising(*((QU, lamb) if mode == "X" else (QU_eval, 0.0))).canonicalize() * hamiltonian_boost
                 H_lamb = -qubo_to_ising(QU_lamb, lamb).canonicalize() * hamiltonian_boost
                 H_eval = -qubo_to_ising(QU_eval, 0.0).canonicalize() * hamiltonian_boost
-                H_return = qubo_to_ising(QU_return, 0.0).canonicalize() * hamiltonian_boost
+                H_return = -qubo_to_ising(QU_return, 0.0).canonicalize() * hamiltonian_boost
                 H_risk = -qubo_to_ising(QU_risk, 0.0).canonicalize() * hamiltonian_boost
 
 
@@ -518,8 +530,8 @@ if __name__ == "__main__":
                 "Assets": N_ASSETS,
                 "GA_time_ms": (time_GA * 1000) if is_GA else np.nan,
                 "BF_time_ms": time_BF * 1000 if (is_GA and DEBUG_BF) else np.nan,
-                "mean12_eps_GA": mean12_eps_GA if (is_GA and not DUPLICATE_ASSET) else np.nan,
-                "mean24_eps_GA": mean24_eps_GA if (is_GA and not DUPLICATE_ASSET) else np.nan,
+                "mean12_eps_GA": mean12_eps_GA if (is_GA and DEBUG_GA) else np.nan,
+                "mean24_eps_GA": mean24_eps_GA if (is_GA and DEBUG_GA) else np.nan,
                 "mean12_eps_BF": mean12_eps_BF if (is_GA and DEBUG_BF) else np.nan,
                 "mean24_eps_BF": mean24_eps_BF if (is_GA and DEBUG_BF) else np.nan
             }
@@ -589,7 +601,12 @@ if __name__ == "__main__":
                 if is_GA:
                     init_state = feasible_reversed_basis_appr.copy()
                 else:
-                    init_state = get_init_states(state_penalty, num_init_bases, n_qubit)
+                    if BEST_BASES:
+                        # print(-state_eval)
+                        init_state = get_init_states(-state_eval, num_init_bases, n_qubit, idx_feasible[0])
+                    else:
+                        init_state = get_init_states(state_penalty, num_init_bases, n_qubit)
+                    
                 # print(sorted(feasible_reversed_basis_appr))
                 # print(sorted(get_init_states(state_penalty, num_init_bases, n_qubit)))
                 # break
@@ -800,7 +817,7 @@ if __name__ == "__main__":
             else:
                 approx_ratio, maxprob_ratio = np.nan, np.nan
             budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-            return_final = float(cudaq.observe(kernel_qaoa_use, H_return, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+            return_final = -float(cudaq.observe(kernel_qaoa_use, H_return, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
             risk_final = float(cudaq.observe(kernel_qaoa_use, H_risk, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
             #
             observe_time = time.time() - st

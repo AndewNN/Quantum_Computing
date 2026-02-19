@@ -665,7 +665,7 @@ def all_state_to_return(qb, lam, QUBO): # QUBO of Max problem
     ss = (ss.reshape(-1, 1, qb) @ l.reshape(-1, qb, 1))
     return ss.reshape(-1) - lam
 
-def get_init_states(state_return, N, n_qubits):
+def get_init_states(state_return, N, n_qubits, feasible=None):
     sorted_idx = np.argsort(state_return)
     # print(state_return[sorted_idx[:N]])
     init_states = []
