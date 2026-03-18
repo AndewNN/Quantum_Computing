@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # Assume that already set CUDA_VISIBLE_DEVICES
     device = torch.device("cuda:0")
 
-    report_col = ["Assets", "Exp", "Qubits", "Approximate_ratio", "Return", "Risk", "Budget_Violations", "Budget", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "epochs", "observe_time"]
+    report_col = ["Assets", "Exp", "Point", "Qubits", "Approximate_ratio", "Return", "Risk", "Budget_Violations", "Budget", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "epochs", "observe_time"]
 
     TARGET_QUBIT_IN = 3
     TARGET_ASSET = [3, 4, 5, 6, 7]
@@ -239,6 +239,12 @@ if __name__ == "__main__":
             help="Convert report to MaxProb format rather than Approximation Ratio"
         )
 
+        parser.add_argument(
+            "--top_N", "--top_N_bases",
+            type=int, default=1,
+            help="Number of top bases to report"
+        )
+
         return parser.parse_args()
 
     args = parse_argss()
@@ -271,6 +277,7 @@ if __name__ == "__main__":
     DEBUG_BF = args.DEBUG_BF
     BEST_BASES = args.BEST_BASES
     is_MaxProb = args.to_MaxProb
+    top_MaxProb = args.top_N
     is_GA = args.GA
     population_size = 2000
     generations = 35
@@ -349,7 +356,7 @@ if __name__ == "__main__":
         # for e in range(E):
             df_now = pd.read_csv(f"{dir_path}/{report_convert_name}") if os.path.exists(f"{dir_path}/{report_convert_name}") else None
             if df_now is not None:
-                if not OVERWRITE and df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
+                if not OVERWRITE and df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] >= top_MaxProb:
                     continue
             else :
                 df_now = pd.DataFrame(columns=report_col)
@@ -620,37 +627,40 @@ if __name__ == "__main__":
             # print("optimal_parameters shape:", optimal_parameters.shape)
 
             result = cudaq.get_state(kernel_qaoa_use, optimal_parameters, *ansatz_fixed_param)
-            idx_r_best = np.argmax(np.abs(result))
-            idx_best = bin(idx_r_best)[2:].zfill(n_qubit)[::-1]
+            for iii in range(top_MaxProb):
+                # idx_r_best = np.argmax(np.abs(result)) # np.argsort(np.abs(result))[-1]
+                idx_r_best = np.argsort(np.abs(result))[-(iii+1)]
+                # print(np.argmax(np.abs(result)), np.argsort(np.abs(result))[0], np.argsort(np.abs(result))[-1])
+                idx_best = bin(idx_r_best)[2:].zfill(n_qubit)[::-1]
 
-            # print(idx_best)
-            result_r = cudaq.get_state(kernel_flipped, result, TARGET_QUBIT)
-            prob = np.abs(result_r)**2
-            mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
-            # print(optimal_expectation)
-            optimal_expectation = (prob * (state_eval)).sum()
-            if len(idx_feasible[0]) >= 2:
-                approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
-                maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
-            else:
-                approx_ratio, maxprob_ratio = np.nan, np.nan
-            
-            if is_MaxProb:
-                budget_violation = state_penalty[int(idx_best, 2)]
-                return_final = state_return[int(idx_best, 2)]
-                risk_final = state_risk[int(idx_best, 2)]
-            else:
-                budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-                return_final = -float(cudaq.observe(kernel_qaoa_use, H_return, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-                risk_final = float(cudaq.observe(kernel_qaoa_use, H_risk, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                # print(idx_best)
+                result_r = cudaq.get_state(kernel_flipped, result, TARGET_QUBIT)
+                prob = np.abs(result_r)**2
+                mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
+                # print(optimal_expectation)
+                optimal_expectation = (prob * (state_eval)).sum()
+                if len(idx_feasible[0]) >= 2:
+                    approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
+                    maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
+                else:
+                    approx_ratio, maxprob_ratio = np.nan, np.nan
+                
+                if is_MaxProb:
+                    budget_violation = state_penalty[int(idx_best, 2)]
+                    return_final = state_return[int(idx_best, 2)]
+                    risk_final = state_risk[int(idx_best, 2)]
+                else:
+                    budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                    return_final = -float(cudaq.observe(kernel_qaoa_use, H_return, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                    risk_final = float(cudaq.observe(kernel_qaoa_use, H_risk, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
 
-            df_now = pd.read_csv(f"{dir_path}/{report_convert_name}") if os.path.exists(f"{dir_path}/{report_convert_name}") else pd.DataFrame(columns=report_col)
+                df_now = pd.read_csv(f"{dir_path}/{report_convert_name}") if os.path.exists(f"{dir_path}/{report_convert_name}") else pd.DataFrame(columns=report_col)
 
-            # remove row such that Assets and Exp match
-            df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e))]
-            
+                # remove row such that Assets and Exp match
+                df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e) & (df_now["Point"] == iii))]
+                
 
-            df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, return_final, risk_final, budget_violation, B, maxprob_ratio, np.nan, np.nan, np.nan, np.nan, np.nan]
-            df_now.sort_values(by=["Assets", "Exp"], inplace=True)
-            df_now.reset_index(drop=True, inplace=True)
-            df_now.to_csv(f"{dir_path}/{report_convert_name}", index=False)
+                df_now.loc[-1] = [N_ASSETS, e, iii, n_qubit, approx_ratio, return_final, risk_final, budget_violation, B, maxprob_ratio, np.nan, np.nan, np.nan, np.nan, np.nan]
+                df_now.sort_values(by=["Assets", "Exp"], inplace=True)
+                df_now.reset_index(drop=True, inplace=True)
+                df_now.to_csv(f"{dir_path}/{report_convert_name}", index=False)

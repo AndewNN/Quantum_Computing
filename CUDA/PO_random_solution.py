@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # Assume that already set CUDA_VISIBLE_DEVICES
     device = torch.device("cuda:0")
 
-    report_col = ["Assets", "Exp", "Qubits", "Approximate_ratio", "Return", "Risk", "Budget_Violations", "Budget", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "epochs", "observe_time"]
+    report_col = ["Assets", "Exp", "Point", "Qubits", "Approximate_ratio", "Return", "Risk", "Budget_Violations", "Budget", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "epochs", "observe_time"]
 
     TARGET_QUBIT_IN = 3
     TARGET_ASSET = [3, 4, 5, 6, 7]
@@ -70,6 +70,14 @@ if __name__ == "__main__":
             type=int, default=50,
             help="Number of Experiments (int)"
         )
+
+        # number of Points (int)
+        parser.add_argument(
+            "-P", "--points",
+            type=int, default=10,
+            help="Number of Points (int)"
+        )
+
 
         # idx of Starting Experiment (int)
         parser.add_argument(
@@ -246,6 +254,7 @@ if __name__ == "__main__":
     # Z = args.basis
     E = args.exp
     E_st = args.exp_start
+    num_points = args.points
     mode = args.mode
     num_init_bases = args.bases
     fd = cudaq.gradients.ForwardDifference()
@@ -316,7 +325,7 @@ if __name__ == "__main__":
     dir_path = f"./experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else ''}{'_bestbases' if BEST_BASES else ''}/{dir_name}"
     file_postfix = f"{mode}{'' if mode == 'X' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost}"
     file_postfix += ("_GA" if mode == "Preserving" and is_GA else "")
-    report_name = f"report_{file_postfix}.csv"
+    report_name = f"report_{file_postfix}_RandSol.csv"
     expect_name = f"expectation_{file_postfix}.npz"
 
     if is_dir:
@@ -341,7 +350,7 @@ if __name__ == "__main__":
         # for e in range(E):
             df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else None
             if df_now is not None:
-                if not OVERWRITE and df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
+                if not OVERWRITE and df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] >= num_points:
                     continue
             else :
                 df_now = pd.DataFrame(columns=report_col)
@@ -386,7 +395,7 @@ if __name__ == "__main__":
             curr_expect[f'A{N_ASSETS}_E{e}_ret'] = data_ret
             curr_expect[f'A{N_ASSETS}_E{e}_cov'] = data_cov
             curr_expect[f'A{N_ASSETS}_E{e}_idx'] = asset_idx_raw
-            np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
+            # np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
             # continue
 
             # print(data_cov.shape)
@@ -648,188 +657,84 @@ if __name__ == "__main__":
                 mm_p = np.min(np.abs(mixer_c)) if len(mixer_c) > 0 else 1e9
             mm_i = np.pi / min(mm_1, mm_2, mm_p)
 
-            idx = 3
-            if not is_torch_optim:
-                optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
-                optimizer.max_iterations = 300
+            # idx = 3
+            # if not is_torch_optim:
+            #     optimizer, optimizer_name, FIND_GRAD = get_optimizer(idx)
+            #     optimizer.max_iterations = 300
                 # print(f"\noptim iter: {optimizer.max_iterations}\noptim eps: {optimizer.eps}")
-            np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS)
-            points = np.random.uniform(-1, 1, (parameter_count))
-            points[::2] *= mm_i
-            points[1::2] *= np.pi
-            # print(f"Initial Parameters: {points.tolist()}")
+            
+            for idx_point in range(num_points):
+                np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS + 967 * idx_point)
+                points = np.random.uniform(-1, 1, (parameter_count))
+                points[::2] *= mm_i
+                points[1::2] *= np.pi
+                # print(f"Initial Parameters: {points.tolist()}")
 
-            # result = cudaq.get_state(kernel_qaoa_use, points, *ansatz_fixed_param)
-            # prob = np.abs(result)**2
-            # print(np.sort(prob))
+                # result = cudaq.get_state(kernel_qaoa_use, points, *ansatz_fixed_param)
+                # prob = np.abs(result)**2
+                # print(np.sort(prob))
 
-            if is_torch_optim:
-                max_iter = 300
-                if random_init:
-                    points_cu = torch.tensor(points, dtype=torch.float64, device=device)
+                init_2_time = time.time() - st
+
+                if is_pbar:
+                    pbar_exp.set_description("optim  ")
+                # print("start optimization")
+                st = time.time()
+                num_iter = 0
+                last_f = None
+                cou_con = 0
+                expectations = []
+                optimal_parameters = points
+                if os.path.exists(f"{dir_path}/{expect_name}"):
+                    curr_expect = np.load(f"{dir_path}/{expect_name}")
                 else:
-                    points_cu = torch.tensor(np.zeros_like(points), dtype=torch.float64, device=device)
-                # print("init at:", np.round(points_cu.cpu().numpy(), 4).tolist())
+                    curr_expect = {}
+                curr_expect = dict(curr_expect)
+                curr_expect[f'A{N_ASSETS}_E{e}'] = np.array(expectations)
+                # print("optimal parameters:", optimal_parameters.tolist())
+                curr_expect[f'A{N_ASSETS}_E{e}_params'] = np.array(optimal_parameters)
+                # np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
+                optim_time = time.time() - st
 
-                # optimizer_cu = Adam([points_cu], lr=hamiltonian_boost)
-                optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.95, 0.98), weight_decay=0.01, decoupled_weight_decay=True)
-                # optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.9, 0.999), weight_decay=0)
-                # optimizer_cu = AdamW([points_cu], lr=0.01)
+                if is_pbar:
+                    pbar_exp.set_description("observe")
+                st = time.time()
+                result = cudaq.get_state(kernel_qaoa_use, optimal_parameters, *ansatz_fixed_param)
+                idx_r_best = np.argmax(np.abs(result))
+                idx_best = bin(idx_r_best)[2:].zfill(n_qubit)[::-1]
 
-                # scheduler_co = CosineAnnealingWarmRestarts(optimizer_cu, T_0=300, T_mult=2)
-                scheduler_co = CosineAnnealingLR(optimizer_cu, T_max=max_iter, eta_min=0.0003)
-                scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.987)
-                scheduler_warmup = CyclicLR(optimizer_cu, base_lr=0.01, max_lr=0.012, step_size_up=10, step_size_down=10, mode='triangular2')
-                # scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_cu], milestones=[40])
-                # scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_co], milestones=[40])
-                scheduler_all = scheduler_co
-                # scheduler_cu = ReduceLROnPlateau(optimizer_cu, mode='min', factor=0.5, patience=20, min_lr= 1e-5)
-                FIND_GRAD = True
+                result_r = cudaq.get_state(kernel_flipped, result, TARGET_QUBIT)
+                prob = np.abs(result_r)**2
+                # print(-np.sort(-prob)[:5])
 
-            init_2_time = time.time() - st
+                # mi_r, ma_r = state_eval.min(), state_eval.max()
+                # print(f"\n\nhere\n{idx_feasible[0].shape} {eps}\n\n")
+                mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
+                # print(optimal_expectation)
+                optimal_expectation = (prob * (state_eval)).sum()
+                # print(optimal_expectation)
+                # print(np.sort(prob))
 
-            if is_pbar:
-                pbar_exp.set_description("optim  ")
-            # print("start optimization")
-            st = time.time()
-            num_iter = 0
-            last_f = None
-            cou_con = 0
-            expectations = []
-            if not is_torch_optim:
-                def cost_func(parameters, cal_expectation=False):
-                    # print("in 1")
-                    exp_return = float(cudaq.observe(kernel_qaoa_use, H_ansatz, parameters, *ansatz_fixed_param).expectation())
-                    # print("in 2")
-                    if cal_expectation:
-                        # if last_f is not None and abs(exp_return - last_f) < F_TOL:
-                        #     raise cudaq.optimization.StopOptimization("Converged")
-                        # print("in cal 1")
-                        num_iter += 1
-                        exp_return_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, parameters, *ansatz_fixed_param).expectation())
-                        # print("in cal 2")
-                        exp_return_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-                        exp_return_violate = sqrt(exp_return_lamb / lamb)
-                        expectations.append([exp_return / hamiltonian_boost, exp_return_eval / hamiltonian_boost, exp_return_lamb, parameters[0], parameters[1]])
-                    return exp_return
+                # print(idx_feasible[0].shape)
+                if len(idx_feasible[0]) >= 2:
+                    approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
+                    maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
+                else:
+                    approx_ratio, maxprob_ratio = np.nan, np.nan
+                budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                return_final = -float(cudaq.observe(kernel_qaoa_use, H_return, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                risk_final = float(cudaq.observe(kernel_qaoa_use, H_risk, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                #
+                observe_time = time.time() - st
 
-                def objective(parameters):
-                    expectation = cost_func(parameters, cal_expectation=True)
-                    return expectation
+                # update df_now for simultaneously run experiments
+                df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else pd.DataFrame(columns=report_col)
+
+                # remove row such that Assets and Exp match
+                df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e) & (df_now["Point"] == idx_point))]
                 
-                def objective_grad_cuda(parameters):
-                    expectation = cost_func(parameters, cal_expectation=True)
-                    gradient = fd.compute(parameters, cost_func, expectation)
-                    return expectation, gradient
-                
-                objective_func = objective_grad_cuda if FIND_GRAD else objective
 
-                # optimizer.initial_parameters = points
-                optimizer.initial_parameters = np.zeros_like(points)
-                optimal_expectation, optimal_parameters = optimizer.optimize(
-                    dimensions=parameter_count, function=objective_func)
-            
-            if is_torch_optim:
-                optimal_expectation, optimal_parameters = None, None
-                # if is_pbar:
-                #     pbar_optim = tqdm(range(max_iter), leave=False)
-                # for it in (range(max_iter) if not is_pbar else pbar_optim):
-                pbar_optim = tqdm(range(max_iter), leave=False, disable=not is_pbar)
-                for it in pbar_optim:
-                    optimizer_cu.zero_grad()
-                    params = points_cu.detach().clone()
-                    expectation = float(cudaq.observe(kernel_qaoa_use, H_ansatz, params.cpu().numpy(), *ansatz_fixed_param).expectation())
-                    # if last_f is not None:
-                    #     print(abs(expectation - last_f))
-                    num_iter += 1
-                    if mode == "X":
-                        expectation_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, params.cpu().numpy(), *ansatz_fixed_param).expectation())
-                    else:
-                        expectation_eval = expectation
-                    expectation_lamb = float(cudaq.observe(kernel_qaoa_use, H_lamb, params.cpu().numpy(), *ansatz_fixed_param).expectation()) / hamiltonian_boost
-                    expectation_violate = sqrt(expectation_lamb / lamb)
-                    grad = torch.zeros_like(params)
-                    # print(grad.dtype)
-                    for j in range(parameter_count):
-                        shift = np.zeros(parameter_count)
-                        shift[j] = SHIFT
-                        forward = float(cudaq.observe(kernel_qaoa_use, H_ansatz, (params.cpu().numpy() + shift), *ansatz_fixed_param).expectation())
-                        # backward = float(cudaq.observe(kernel_qaoa_use, H_ansatz, (params.cpu().numpy() - shift), *ansatz_fixed_param).expectation())
-                        # grad[j] = (forward - backward) / (2.0 * SHIFT)
-                        grad[j] = (forward - expectation) / SHIFT
-                    # print(grad)
-                    # print(grad.abs().mean().item())
-                    points_cu.grad = grad
-                    optimizer_cu.step()
-                    # scheduler_cu.step()
-                    # scheduler_cu.step(expectation)
-                    scheduler_all.step()
-                    # print(points_cu[0].item(), points_cu[1].item())
-                    expectations.append([expectation/hamiltonian_boost, expectation_eval/hamiltonian_boost, expectation_lamb, points_cu[0].item(), points_cu[1].item()])
-                    # if it > 3 and last_f is not None and abs(expectation - last_f) < F_TOL:
-                    #     break
-                    
-                    cou_con = cou_con + 1 if last_f is not None and abs(expectation - last_f) < F_TOL else 0
-                    if cou_con >= 3:
-                        break
-                    last_f = expectation
-                    
-                    # if optimal_expectation is None or optimal_expectation > expectation_eval:
-                    #     optimal_expectation = expectation_eval
-                    #     optimal_parameters = points_cu.cpu().numpy()
-                    if is_pbar:
-                        pbar_optim.set_description(f"Iter {it}, Exp_obj {expectation/hamiltonian_boost:.6f}, Exp_eval {expectation_eval/hamiltonian_boost:.6f}, Exp_lamb {expectation_lamb:.6f}, LR {optimizer_cu.param_groups[0]['lr']:.4f}")
-                optimal_parameters = points_cu.cpu().numpy()
-            if os.path.exists(f"{dir_path}/{expect_name}"):
-                curr_expect = np.load(f"{dir_path}/{expect_name}")
-            else:
-                curr_expect = {}
-            curr_expect = dict(curr_expect)
-            curr_expect[f'A{N_ASSETS}_E{e}'] = np.array(expectations)
-            # print("optimal parameters:", optimal_parameters.tolist())
-            curr_expect[f'A{N_ASSETS}_E{e}_params'] = np.array(optimal_parameters)
-            np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
-            optim_time = time.time() - st
-
-            if is_pbar:
-                pbar_exp.set_description("observe")
-            st = time.time()
-            result = cudaq.get_state(kernel_qaoa_use, optimal_parameters, *ansatz_fixed_param)
-            idx_r_best = np.argmax(np.abs(result))
-            idx_best = bin(idx_r_best)[2:].zfill(n_qubit)[::-1]
-
-            result_r = cudaq.get_state(kernel_flipped, result, TARGET_QUBIT)
-            prob = np.abs(result_r)**2
-            # print(-np.sort(-prob)[:5])
-
-            # mi_r, ma_r = state_eval.min(), state_eval.max()
-            # print(f"\n\nhere\n{idx_feasible[0].shape} {eps}\n\n")
-            mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
-            # print(optimal_expectation)
-            optimal_expectation = (prob * (state_eval)).sum()
-            # print(optimal_expectation)
-            # print(np.sort(prob))
-
-            # print(idx_feasible[0].shape)
-            if len(idx_feasible[0]) >= 2:
-                approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
-                maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
-            else:
-                approx_ratio, maxprob_ratio = np.nan, np.nan
-            budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-            return_final = -float(cudaq.observe(kernel_qaoa_use, H_return, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-            risk_final = float(cudaq.observe(kernel_qaoa_use, H_risk, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
-            #
-            observe_time = time.time() - st
-
-            # update df_now for simultaneously run experiments
-            df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else pd.DataFrame(columns=report_col)
-
-            # remove row such that Assets and Exp match
-            df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e))]
-            
-
-            df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, return_final, risk_final, budget_violation, B, maxprob_ratio, init_1_time, init_2_time, optim_time, num_iter, observe_time]
-            df_now.sort_values(by=["Assets", "Exp"], inplace=True)
-            df_now.reset_index(drop=True, inplace=True)
-            df_now.to_csv(f"{dir_path}/{report_name}", index=False)
+                df_now.loc[-1] = [N_ASSETS, e, idx_point, n_qubit, approx_ratio, return_final, risk_final, budget_violation, B, maxprob_ratio, init_1_time, init_2_time, optim_time, num_iter, observe_time]
+                df_now.sort_values(by=["Assets", "Exp"], inplace=True)
+                df_now.reset_index(drop=True, inplace=True)
+                df_now.to_csv(f"{dir_path}/{report_name}", index=False)
