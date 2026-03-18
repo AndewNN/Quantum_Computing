@@ -232,6 +232,13 @@ if __name__ == "__main__":
             help="Use best bases for Preserving mixer"
         )
 
+        # is to MaxProb
+        parser.add_argument(
+            "--to_MaxProb",
+            action="store_true", default=False,
+            help="Convert report to MaxProb format rather than Approximation Ratio"
+        )
+
         return parser.parse_args()
 
     args = parse_argss()
@@ -263,7 +270,7 @@ if __name__ == "__main__":
     DUPLICATE_ASSET = args.DUPLICATE_ASSET
     DEBUG_BF = args.DEBUG_BF
     BEST_BASES = args.BEST_BASES
-
+    is_MaxProb = args.to_MaxProb
     is_GA = args.GA
     population_size = 2000
     generations = 35
@@ -316,11 +323,12 @@ if __name__ == "__main__":
     dir_path = f"./experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else ''}{'_bestbases' if BEST_BASES else ''}/{dir_name}"
     file_postfix = f"{mode}{'' if mode == 'X' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost}"
     file_postfix += ("_GA" if mode == "Preserving" and is_GA else "")
-    report_name = f"report_{file_postfix}.csv"
+    report_convert_name = f"report_{file_postfix}{'_MaxProb' if is_MaxProb else ''}.csv"
     expect_name = f"expectation_{file_postfix}.npz"
 
-    if is_dir:
-        os.makedirs(dir_path, exist_ok=True)
+    # if is_dir:
+    #     os.makedirs(dir_path, exist_ok=True)
+    assert os.path.exists(dir_path), f"Directory {dir_path} does not exist."
 
     print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, epsilon: {eps.tolist()}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}, GA: {is_GA}, boost: {hamiltonian_X_boost if mode == 'X' else hamiltonian_P_boost}")
     # if __name__ == "__main__":
@@ -339,7 +347,7 @@ if __name__ == "__main__":
         pbar_exp = tqdm(range(E_st, E), leave=False, disable=not is_pbar)
         for e in pbar_exp:
         # for e in range(E):
-            df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else None
+            df_now = pd.read_csv(f"{dir_path}/{report_convert_name}") if os.path.exists(f"{dir_path}/{report_convert_name}") else None
             if df_now is not None:
                 if not OVERWRITE and df_now[(df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e)].shape[0] > 0:
                     continue
@@ -386,7 +394,7 @@ if __name__ == "__main__":
             curr_expect[f'A{N_ASSETS}_E{e}_ret'] = data_ret
             curr_expect[f'A{N_ASSETS}_E{e}_cov'] = data_cov
             curr_expect[f'A{N_ASSETS}_E{e}_idx'] = asset_idx_raw
-            np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
+            # np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
             # continue
 
             # print(data_cov.shape)
@@ -505,45 +513,11 @@ if __name__ == "__main__":
                 H_risk = -qubo_to_ising(QU_risk, 0.0).canonicalize() * hamiltonian_boost
 
 
-            # state_return = all_state_to_return(n_qubit, lamb, QU)
-            if DEBUG_GA ^ (not DEBUG_BF):
-                st = time.perf_counter()
-                state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb) # lamb * |P^t x -1|^2
-                time_BF = time.perf_counter() - st
-
-            # print("Time GA penalty (s):", time_GA)
-            # print("Time BF penalty (s):", time_BF)
-            if DEBUG_BF:
-                state_penalty_s = np.sort(state_penalty)
-                mean12_eps_BF = np.sqrt(state_penalty_s[:12] / lamb).mean()
-                mean24_eps_BF = np.sqrt(state_penalty_s[:24] / lamb).mean()
-            # print(state_penalty_s[:24])
-            # for i in range(24):
-            #     gaa = list_diff_ga[i]
-            #     bff = np.sqrt(state_penalty_s[i] / lamb)
-            #     print(gaa, bff, ("****************" if bff - gaa > 1e-8 else ""))
-            #     print(list_chrom_ga[i])
-            #     print()
-            
-            df_speed = (pd.read_csv("./speed.csv") if os.path.exists("./speed.csv") else pd.DataFrame(columns=["Assets", "GA_time_ms", "BF_time_ms", "mean12_eps_GA", "mean24_eps_GA", "mean12_eps_BF", "mean24_eps_BF"]))
-            new_row_speed = {
-                "Assets": N_ASSETS,
-                "GA_time_ms": (time_GA * 1000) if is_GA else np.nan,
-                "BF_time_ms": time_BF * 1000 if (is_GA and DEBUG_BF) else np.nan,
-                "mean12_eps_GA": mean12_eps_GA if (is_GA and DEBUG_GA) else np.nan,
-                "mean24_eps_GA": mean24_eps_GA if (is_GA and DEBUG_GA) else np.nan,
-                "mean12_eps_BF": mean12_eps_BF if (is_GA and DEBUG_BF) else np.nan,
-                "mean24_eps_BF": mean24_eps_BF if (is_GA and DEBUG_BF) else np.nan
-            }
-            if is_GA and DEBUG_GA:
-                if os.path.exists("./speed.csv"):
-                    df_speed = pd.concat([df_speed, pd.DataFrame([new_row_speed])], ignore_index=True)
-                else:
-                    df_speed = pd.DataFrame([new_row_speed])
-                df_speed.to_csv("./speed.csv", index=False)
-                continue
-
+            state_penalty = -all_state_to_return(n_qubit, lamb, QU_lamb) # lamb * |P^t x -1|^2
             state_eval = all_state_to_return(n_qubit, 0.0, QU_eval)
+            state_return = all_state_to_return(n_qubit, 0.0, QU_return)
+            state_risk = -all_state_to_return(n_qubit, 0.0, QU_risk)
+
 
             # state_optim = -all_state_to_return(n_qubit, *((lamb, QU) if mode == "X" else (0.0, QU_eval)))
             # idx_bestt = np.argmin(state_eval)
@@ -641,6 +615,42 @@ if __name__ == "__main__":
 
                 ansatz_fixed_param = (int(n_qubit), layer_count, idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use, mixer_s, mixer_c, init_bases)
             npz = np.load(f"{dir_path}/{expect_name}")
-            print(npz.files)
+            # print(npz.files)
             optimal_parameters = npz[f'A{N_ASSETS}_E{e}_params']
-            print("optimal_parameters shape:", optimal_parameters.shape)
+            # print("optimal_parameters shape:", optimal_parameters.shape)
+
+            result = cudaq.get_state(kernel_qaoa_use, optimal_parameters, *ansatz_fixed_param)
+            idx_r_best = np.argmax(np.abs(result))
+            idx_best = bin(idx_r_best)[2:].zfill(n_qubit)[::-1]
+
+            # print(idx_best)
+            result_r = cudaq.get_state(kernel_flipped, result, TARGET_QUBIT)
+            prob = np.abs(result_r)**2
+            mi_r, ma_r = state_eval[idx_feasible].min(), state_eval[idx_feasible].max()
+            # print(optimal_expectation)
+            optimal_expectation = (prob * (state_eval)).sum()
+            if len(idx_feasible[0]) >= 2:
+                approx_ratio = (optimal_expectation - mi_r) / (ma_r - mi_r)
+                maxprob_ratio = (state_eval[int(idx_best, 2)] - mi_r) / (ma_r - mi_r)
+            else:
+                approx_ratio, maxprob_ratio = np.nan, np.nan
+            
+            if is_MaxProb:
+                budget_violation = state_penalty[int(idx_best, 2)]
+                return_final = state_return[int(idx_best, 2)]
+                risk_final = state_risk[int(idx_best, 2)]
+            else:
+                budget_violation = float(cudaq.observe(kernel_qaoa_use, H_lamb, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                return_final = -float(cudaq.observe(kernel_qaoa_use, H_return, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+                risk_final = float(cudaq.observe(kernel_qaoa_use, H_risk, optimal_parameters, *ansatz_fixed_param).expectation()) / hamiltonian_boost
+
+            df_now = pd.read_csv(f"{dir_path}/{report_convert_name}") if os.path.exists(f"{dir_path}/{report_convert_name}") else pd.DataFrame(columns=report_col)
+
+            # remove row such that Assets and Exp match
+            df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e))]
+            
+
+            df_now.loc[-1] = [N_ASSETS, e, n_qubit, approx_ratio, return_final, risk_final, budget_violation, B, maxprob_ratio, np.nan, np.nan, np.nan, np.nan, np.nan]
+            df_now.sort_values(by=["Assets", "Exp"], inplace=True)
+            df_now.reset_index(drop=True, inplace=True)
+            df_now.to_csv(f"{dir_path}/{report_convert_name}", index=False)
