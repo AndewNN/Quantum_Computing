@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # Assume that already set CUDA_VISIBLE_DEVICES
     device = torch.device("cuda:0")
 
-    report_col = ["Assets", "Exp", "Point", "Qubits", "Approximate_ratio", "Return", "Risk", "Budget_Violations", "Budget", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "epochs", "observe_time"]
+    report_col = ["Assets", "Exp", "Seed", "Qubits", "Approximate_ratio", "Return", "Risk", "Budget_Violations", "Budget", "MaxProb_ratio", "init_1_time", "init_2_time", "optim_time", "epochs", "observe_time"]
 
     TARGET_QUBIT_IN = 3
     TARGET_ASSET = [3, 4, 5, 6, 7]
@@ -664,7 +664,7 @@ if __name__ == "__main__":
                 # print(f"\noptim iter: {optimizer.max_iterations}\noptim eps: {optimizer.eps}")
             
             for idx_point in range(num_points):
-                np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS + 967 * idx_point)
+                np.random.seed(4001 + 4099 * e + 4999 * N_ASSETS + 5099 * idx_point)
                 points = np.random.uniform(-1, 1, (parameter_count))
                 points[::2] *= mm_i
                 points[1::2] *= np.pi
@@ -731,7 +731,7 @@ if __name__ == "__main__":
                 df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else pd.DataFrame(columns=report_col)
 
                 # remove row such that Assets and Exp match
-                df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e) & (df_now["Point"] == idx_point))]
+                df_now = df_now[~((df_now["Assets"] == N_ASSETS) & (df_now["Exp"] == e) & (df_now["Seed"] == idx_point))]
                 
 
                 df_now.loc[-1] = [N_ASSETS, e, idx_point, n_qubit, approx_ratio, return_final, risk_final, budget_violation, B, maxprob_ratio, init_1_time, init_2_time, optim_time, num_iter, observe_time]
