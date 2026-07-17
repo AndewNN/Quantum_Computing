@@ -282,6 +282,7 @@ def _get_pauli_objects(X, Y):
     A, B = init_pauli(X[0], Y[0])
     for i in range(1, len(X)):
         A, B = transform_pauli(X[i], Y[i], i, A, B)
+    # print(f"Done by thread    : '{threading.current_thread().name}'")
     return A
 
 def get_pauli_serializable(X, Y, n_qubits):
@@ -297,6 +298,7 @@ def get_pauli_serializable(X, Y, n_qubits):
         pauli_word = term.get_pauli_word(n_qubits)
         if coeff.real != 0 and len(pauli_word) > 0:
             serializable_A.append((coeff.real, pauli_word))
+    # print(len(serializable_A))
     return serializable_A
         
 def basis_T_to_pauli_parallel(bases: List[str], T: np.ndarray, n_qubits: int) -> Tuple[List[cudaq.pauli_word], np.ndarray]:
@@ -740,6 +742,12 @@ def clip_df(df, restore_iter):
     assert restore_iter <= len(df), "restore_iter exceeds the number of iterations in the CSV file."
     df = df.iloc[:restore_iter]
     return df
+
+def to_sig(x, sig=3):
+    x = float(x)
+    res = float(f"{x:.{sig}}")
+    res = int(res) if res.is_integer() else res
+    return res
 
 
 # Optional: a test routine when the module is executed as a script.
