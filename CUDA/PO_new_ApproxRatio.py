@@ -808,8 +808,8 @@ if __name__ == "__main__":
 
                     # scheduler_co = CosineAnnealingWarmRestarts(optimizer_cu, T_0=300, T_mult=2)
                     scheduler_co = CosineAnnealingLR(optimizer_cu, T_max=max_iter, eta_min=0.0003)
-                    scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.987)
-                    scheduler_warmup = CyclicLR(optimizer_cu, base_lr=0.01, max_lr=0.012, step_size_up=10, step_size_down=10, mode='triangular2')
+                    # scheduler_cu = ExponentialLR(optimizer_cu, gamma=0.987)
+                    # scheduler_warmup = CyclicLR(optimizer_cu, base_lr=0.01, max_lr=0.012, step_size_up=10, step_size_down=10, mode='triangular2')
                     # scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_cu], milestones=[40])
                     # scheduler_all = SequentialLR(optimizer_cu, schedulers=[scheduler_warmup, scheduler_co], milestones=[40])
                     scheduler_all = scheduler_co
