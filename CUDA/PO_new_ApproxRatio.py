@@ -188,7 +188,7 @@ if __name__ == "__main__":
         parser.add_argument(
             "--no_dir",
             action="store_true", default=False,
-            help="Disable create directory (bool) e.g. --no_dir True or --no_dir False"
+            help="Disable create directory (bool) e.g. --no_dir"
         )
 
         # Normalize the Hamiltonian boost automatically
@@ -223,14 +223,14 @@ if __name__ == "__main__":
         parser.add_argument(
             "--random_init",
             action="store_true", default=False,
-            help="Use random initialization (bool) e.g. --random_init True or --random_init False"
+            help="Use random initialization (bool) e.g. --random_init"
         )
 
         # Linear Ramp init
         parser.add_argument(
             "--LR_init",
             action="store_true", default=False,
-            help="Use Linear Ramp initialization (bool) e.g. --LR_init True or --LR_init False"
+            help="Use Linear Ramp initialization (bool) e.g. --LR_init"
         )
 
         # GA debug
@@ -768,7 +768,7 @@ if __name__ == "__main__":
                 init_2_time = time.time() - st
 
                 if is_pbar:
-                    pbar_exp.set_description(f"optim (e={e}, SEED={i_s}) ")
+                    pbar_exp.set_description(f"optim (e={e}, SEED={i_s}, Boost={hamiltonian_boost}) ")
                 # print("start optimization")
                 st = time.time()
                 num_iter = 0
