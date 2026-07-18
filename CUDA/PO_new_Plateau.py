@@ -144,6 +144,7 @@ data_ret_p_pd = pd.read_csv("../dataset/top_50_us_stocks_returns_price.csv")
 # print(np.sort(data_ret_p_pd["Price"]))
 
 data_ret_p_pd = data_ret_p_pd[(data_ret_p_pd["Price"] > min_P) & (data_ret_p_pd["Price"] < max_P)].reset_index(drop=True)
+data_ret_p_pd = data_ret_p_pd.drop("Company_Name", axis=1)
 data_cov_pd = data_cov_pd.loc[data_cov_pd["Ticker"].isin(data_ret_p_pd["Ticker"])].reset_index(drop=True)
 data_cov_pd = data_cov_pd[["Ticker"] + data_cov_pd["Ticker"].tolist()]
 # print(data_cov_pd.shape, data_ret_p_pd.shape) 
@@ -183,6 +184,7 @@ for e in pbar_all:
         # asset_idx = np.random.choice(data_cov_pd.shape[0], max(TARGET_ASSET), replace=False)
         asset_idx = np.random.choice(data_cov_pd.shape[0], N_ASSETS, replace=False)
         data_cov = data_cov_pd.drop("Ticker", axis=1).to_numpy()[asset_idx, :][:, asset_idx]
+        # print(data_ret_p_pd.dtypes)
         stock_names = data_ret_p_pd["Ticker"].to_numpy()[asset_idx]
         # print("Selected Stocks: ", stock_names)
         data_ret_p = data_ret_p_pd.drop("Ticker", axis=1).to_numpy()[asset_idx, :]
