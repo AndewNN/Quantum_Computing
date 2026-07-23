@@ -420,17 +420,6 @@ if __name__ == "__main__":
             # print(asset_idx)
             # break
 
-            if os.path.exists(f"{dir_path}/{expect_name}"):
-                curr_expect = np.load(f"{dir_path}/{expect_name}")
-            else:
-                curr_expect = {}
-            curr_expect = dict(curr_expect)
-            curr_expect[f'A{N_ASSETS}_E{e}_P'] = data_p
-            curr_expect[f'A{N_ASSETS}_E{e}_ret'] = data_ret
-            curr_expect[f'A{N_ASSETS}_E{e}_cov'] = data_cov
-            curr_expect[f'A{N_ASSETS}_E{e}_idx'] = asset_idx_raw
-            np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
-            # continue
 
             # print(data_cov.shape)
 
@@ -595,6 +584,19 @@ if __name__ == "__main__":
                     continue
             else :
                 df_now = pd.DataFrame(columns=report_col)
+                
+            if os.path.exists(f"{dir_path}/{expect_name}"):
+                curr_expect = np.load(f"{dir_path}/{expect_name}")
+            else:
+                curr_expect = {}
+            curr_expect = dict(curr_expect)
+            curr_expect[f'A{N_ASSETS}_E{e}_P'] = data_p
+            curr_expect[f'A{N_ASSETS}_E{e}_ret'] = data_ret
+            curr_expect[f'A{N_ASSETS}_E{e}_cov'] = data_cov
+            curr_expect[f'A{N_ASSETS}_E{e}_idx'] = asset_idx_raw
+            np.savez_compressed(f"{dir_path}/{expect_name}", **curr_expect)
+            # continue
+
             # state_return = all_state_to_return(n_qubit, lamb, QU)
             if DEBUG_GA ^ (not DEBUG_BF):
                 st = time.perf_counter()
@@ -802,7 +804,8 @@ if __name__ == "__main__":
                     # print("init at:", np.round(points_cu.cpu().numpy(), 4).tolist())
 
                     # optimizer_cu = Adam([points_cu], lr=hamiltonian_boost)
-                    optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.95, 0.98), weight_decay=0.01, decoupled_weight_decay=True)
+                    optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.95, 0.98), weight_decay=0, decoupled_weight_decay=True) # L2 regularization like not needed
+                    # optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.95, 0.98), weight_decay=0.01, decoupled_weight_decay=True)
                     # optimizer_cu = Adam([points_cu], lr=0.01, betas=(0.9, 0.999), weight_decay=0)
                     # optimizer_cu = AdamW([points_cu], lr=0.01)
 
