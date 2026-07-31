@@ -170,6 +170,13 @@ if __name__ == "__main__":
             help="Hamiltonian boost for Preserving mixer (float)"
         )
 
+        # Learning rate scaling
+        parser.add_argument(
+            "-lr_s", "--learning_rate_scale",
+            type=float, default=1.0,
+            help="Forced learning rate scaling for optimizer (float)"
+        )
+
         # epsilon for budget feasible set for each Asset
         parser.add_argument(
             "-eps", "--epsilon",
@@ -194,7 +201,7 @@ if __name__ == "__main__":
         # Normalize the Hamiltonian boost automatically
         parser.add_argument(
             "--normalize_hamiltonian", "-norm",
-            type=str, default="Jh",
+            type=str, default="fixed",
             help="Normalize the Hamiltonian boost automatically (accept 'J', 'Jh', 'h', 'fixed') e.g. -norm Jh"
         )
 
@@ -308,7 +315,7 @@ if __name__ == "__main__":
     BEST_BASES = args.BEST_BASES
     delta_beta = args.delta_beta
     delta_gamma = args.delta_gamma
-
+    learning_rate_scale = args.learning_rate_scale
     is_GA = args.GA
     population_size = 2000
     generations = 35
@@ -360,7 +367,7 @@ if __name__ == "__main__":
     f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
     # dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}{'_torch' if is_torch_optim else ''}"
     dir_name = f"exp_L{f_LAMB}_q{f_Q}"
-    dir_path = f"./experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else '_LR' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}/{dir_name}"
+    dir_path = f"./experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else '_LR' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}_S{learning_rate_scale}/{dir_name}"
     # file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost if mode == 'X' else hamiltonian_R_boost}"
     file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{auto_boost_mode}"
     file_postfix += ("_GA" if mode == "Preserving" and is_GA else "")
@@ -370,7 +377,7 @@ if __name__ == "__main__":
     if is_dir:
         os.makedirs(dir_path, exist_ok=True)
 
-    print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, epsilon: {eps.tolist()}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}, GA: {is_GA}, boost: {hamiltonian_X_boost if mode == 'X' else hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_R_boost}")
+    print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, epsilon: {eps.tolist()}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}, GA: {is_GA}, boost: {hamiltonian_X_boost if mode == 'X' else hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_R_boost}, learning_rate_scale: {learning_rate_scale}")
     # if __name__ == "__main__":
         # from multiprocessing import freeze_support
         # freeze_support()
@@ -561,6 +568,7 @@ if __name__ == "__main__":
                 # print(f"max|h|: {to_sig(max_h)} -> {1/max_h}")
                 use_norm = (max_J if auto_boost_mode == "J" else max_J_h if auto_boost_mode == "Jh" else max_h if auto_boost_mode == "h" else 1.0)
                 hamiltonian_boost = 1 / use_norm if auto_boost_mode != "fixed" else hamiltonian_boost
+                hamiltonian_boost = hamiltonian_boost * learning_rate_scale
                 hamiltonian_boost = to_sig(hamiltonian_boost, 4)
 
                 H_ansatz = H_ansatz * hamiltonian_boost
