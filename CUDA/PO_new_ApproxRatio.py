@@ -124,14 +124,14 @@ if __name__ == "__main__":
         # delta_beta of LR-QAOA
         parser.add_argument(
             "-d_b", "--delta_beta",
-            type=float, default=1.0,
+            type=float, default=0.3,
             help="Delta beta for LR-QAOA (float)"
         )
 
         # delta_gamma of LR-QAOA
         parser.add_argument(
             "-d_g", "--delta_gamma",
-            type=float, default=1.0,
+            type=float, default=0.6,
             help="Delta gamma for LR-QAOA (float)"
         )
 
@@ -274,6 +274,13 @@ if __name__ == "__main__":
             type=int, default=1,
             help="Number of seeds to run for each experiment setting (int)"
         )
+
+        # forced root dir name
+        parser.add_argument(
+            "--root_dir", "-root",
+            type=str, default=None,
+            help="Forced root directory name for reading/writing results (str)"
+        )
         
 
         return parser.parse_args()
@@ -301,6 +308,7 @@ if __name__ == "__main__":
     eps = args.epsilon
     is_pbar = not args.no_pbar
     is_dir = not args.no_dir
+    root_dir = args.root_dir
     # is_torch_optim = args.torch_optim
     auto_boost_mode = args.normalize_hamiltonian
     assert auto_boost_mode in ["J", "Jh", "h", "fixed"]
@@ -367,7 +375,8 @@ if __name__ == "__main__":
     f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
     # dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}{'_torch' if is_torch_optim else ''}"
     dir_name = f"exp_L{f_LAMB}_q{f_Q}"
-    dir_path = f"./experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else '_LR' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}_S{learning_rate_scale}/{dir_name}"
+    root_name = root_dir if root_dir is not None else f"experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else f'_LR_{delta_beta}_{delta_gamma}' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}_S{learning_rate_scale}_{auto_boost_mode}"
+    dir_path = f"{root_name}/{dir_name}"
     # file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost if mode == 'X' else hamiltonian_R_boost}"
     file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{auto_boost_mode}"
     file_postfix += ("_GA" if mode == "Preserving" and is_GA else "")
