@@ -184,6 +184,14 @@ if __name__ == "__main__":
             help="List of epsilon for budget feasible set for each Asset, e.g. -eps 0.1 0.2"
         )
 
+        # Weight_decay of optimizer
+        parser.add_argument(
+            "-wd", "--weight_decay",
+            type=float, default=0.0,
+            help="Weight decay for optimizer (float)"
+        )
+
+
         # disable progress bar
         parser.add_argument(
             "--no_pbar",
@@ -315,6 +323,7 @@ if __name__ == "__main__":
 
     OVERWRITE = args.OVERWRITE
     F_TOL = args.f_tol
+    WEIGHT_DECAY = args.weight_decay
     random_init = args.random_init
     is_LR_init = args.LR_init
     DEBUG_GA = args.DEBUG_GA
@@ -334,6 +343,7 @@ if __name__ == "__main__":
     hamiltonian_P_boost = hamiltonian_P_boost if not hamiltonian_P_boost.is_integer() else int(hamiltonian_P_boost)
     hamiltonian_X_boost = hamiltonian_X_boost if not hamiltonian_X_boost.is_integer() else int(hamiltonian_X_boost)
     hamiltonian_R_boost = hamiltonian_R_boost if not hamiltonian_R_boost.is_integer() else int(hamiltonian_R_boost)
+    WEIGHT_DECAY = WEIGHT_DECAY if not WEIGHT_DECAY.is_integer() else int(WEIGHT_DECAY)
 
     LAMB = LAMB if mode in ["X", "Ramp"] else 1.0
     assert mode in modes, f"Mode {mode} not in {modes}"
@@ -375,7 +385,7 @@ if __name__ == "__main__":
     f_LAMB = LAMB if not LAMB.is_integer() else int(LAMB)
     # dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}{'_torch' if is_torch_optim else ''}"
     dir_name = f"exp_L{f_LAMB}_q{f_Q}"
-    root_name = root_dir if root_dir is not None else f"experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else f'_LR_{delta_beta}_{delta_gamma}' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}_S{learning_rate_scale}_{auto_boost_mode}"
+    root_name = root_dir if root_dir is not None else f"experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else f'_LR_{delta_beta}_{delta_gamma}' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}_S{learning_rate_scale}_W{WEIGHT_DECAY}_{auto_boost_mode}"
     dir_path = f"{root_name}/{dir_name}"
     print(f"Results will be saved in: {dir_path}")
     # file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost if mode == 'X' else hamiltonian_R_boost}"
@@ -387,7 +397,7 @@ if __name__ == "__main__":
     if is_dir:
         os.makedirs(dir_path, exist_ok=True)
 
-    print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, epsilon: {eps.tolist()}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}, GA: {is_GA}, boost: {hamiltonian_X_boost if mode == 'X' else hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_R_boost}, learning_rate_scale: {learning_rate_scale}")
+    print(f"Experiments: {E}, Qubits/Asset: {TARGET_QUBIT_IN}, Assets: {TARGET_ASSET}, epsilon: {eps.tolist()}, Lambda: {LAMB}, q: {Q}, Layers: {LAYER}, mode: {mode}{f', num_init_bases: {num_init_bases}' if mode == 'Preserving' else ''}, GA: {is_GA}, boost: {hamiltonian_X_boost if mode == 'X' else hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_R_boost}, learning_rate_scale: {learning_rate_scale}, weight_decay: {WEIGHT_DECAY}")
     # if __name__ == "__main__":
         # from multiprocessing import freeze_support
         # freeze_support()
