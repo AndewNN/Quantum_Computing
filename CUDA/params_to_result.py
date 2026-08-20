@@ -406,6 +406,7 @@ if __name__ == "__main__":
     dir_name = f"exp_L{f_LAMB}_q{f_Q}"
     root_name = root_dir if root_dir is not None else f"experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else f'_LR_{delta_beta}_{delta_gamma}' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}_S{learning_rate_scale}_W{WEIGHT_DECAY}_{auto_boost_mode}"
     dir_path = f"{root_name}/{dir_name}"
+    print(f"Results will be saved in: {dir_path}")
     # file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost if mode == 'X' else hamiltonian_R_boost}"
     file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{auto_boost_mode}"
     file_postfix += ("_GA" if mode == "Preserving" and is_GA else "")
