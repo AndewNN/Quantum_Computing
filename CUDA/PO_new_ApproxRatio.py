@@ -289,7 +289,21 @@ if __name__ == "__main__":
             type=str, default=None,
             help="Forced root directory name for reading/writing results (str)"
         )
-        
+
+        # run only specific experiment points
+        parser.add_argument(
+            "--exp_list", "-e_list",
+            nargs="+", type=int, default=None,
+            help="Explicit list of experiment indices to run (overrides -E/-E_st), e.g. -e_list 0 3 7"
+        )
+
+        # postfix appended to root directory name (for parallel split runs)
+        parser.add_argument(
+            "--dir_postfix", "-post",
+            type=str, default="",
+            help="Postfix appended to root directory name (results go to <root>_<postfix>), e.g. -post job1"
+        )
+
 
         return parser.parse_args()
 
@@ -305,6 +319,7 @@ if __name__ == "__main__":
     # Z = args.basis
     E = args.exp
     E_st = args.exp_start
+    exp_points = args.exp_list if args.exp_list is not None else list(range(E_st, E))
     mode = args.mode
     num_init_bases = args.bases
     n_seed = args.n_seed
@@ -386,6 +401,8 @@ if __name__ == "__main__":
     # dir_name = f"exp_p{LAYER}_L{f_LAMB}_q{f_Q}{'_torch' if is_torch_optim else ''}"
     dir_name = f"exp_L{f_LAMB}_q{f_Q}"
     root_name = root_dir if root_dir is not None else f"experiments_approx_Q{TARGET_QUBIT_IN}{'_RAND' if random_init else f'_LR_{delta_beta}_{delta_gamma}' if is_LR_init else ''}{'_bestbases' if BEST_BASES else ''}_S{learning_rate_scale}_W{WEIGHT_DECAY}_{auto_boost_mode}"
+    if args.dir_postfix:
+        root_name = f"{root_name}_{args.dir_postfix}"
     dir_path = f"{root_name}/{dir_name}"
     print(f"Results will be saved in: {dir_path}")
     # file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost if mode == 'X' else hamiltonian_R_boost}"
@@ -411,10 +428,10 @@ if __name__ == "__main__":
             pbar_A.set_description(f"Assets {N_ASSETS}")
             # pbar_exp = tqdm(range(E_st, E), leave=False)
         # for e in (range(E_st, E) if not is_pbar else pbar_exp):
-        pbar_exp = tqdm(range(E_st, E), leave=False, disable=not is_pbar)
+        pbar_exp = tqdm(exp_points, leave=False, disable=not is_pbar)
         for e in pbar_exp:
         # for e in range(E):
-            
+
 
             if is_pbar:
                 pbar_exp.set_description("init_1 ")
