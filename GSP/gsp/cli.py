@@ -1,6 +1,6 @@
 """Command line: `gsp <group> <command>` or `python -m gsp.cli ...`.
 
-S1:  gsp instances freeze [--N 4 5 ...] [--draws 30] [--results DIR]
+S1:  gsp instances freeze [--N 4 5 ...] [--draws 30] [--results DIR] [--replace-set]
      gsp instances verify [--deep] [--results DIR]
      gsp instances table  [--no-write] [--results DIR]
      gsp index            [--results DIR]     (rebuild results/index/registry.parquet)
@@ -22,7 +22,7 @@ def _cmd_instances(args) -> int:
     if args.action == "freeze":
         Ns = tuple(args.N) if args.N else N_VALUES
         fz.freeze(root=args.results, dataset_dir=args.dataset, N_values=Ns,
-                  draws_per_n=args.draws or DRAWS_PER_N)
+                  draws_per_n=args.draws or DRAWS_PER_N, replace_set=args.replace_set)
         ok = fz.verify(root=args.results, dataset_dir=args.dataset)
         return 0 if ok else 1
     if args.action == "verify":
@@ -60,6 +60,9 @@ def main(argv=None) -> int:
     pi.add_argument("--N", type=int, nargs="+", default=None, help="freeze only these N (tests)")
     pi.add_argument("--draws", type=int, default=None, help="accepted draws per N (tests; default 30)")
     pi.add_argument("--deep", action="store_true", help="verify: rebuild in memory and compare")
+    pi.add_argument("--replace-set", action="store_true",
+                    help="freeze: replace the frozen set after a deliberate, logged rule change (surviving "
+                         "ids must stay byte-identical; dropped ids' files are removed)")
     pi.add_argument("--no-write", action="store_true", help="table: print only")
     pi.set_defaults(func=_cmd_instances)
 

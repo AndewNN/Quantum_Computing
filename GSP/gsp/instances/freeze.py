@@ -1,7 +1,8 @@
 """`gsp instances freeze | verify | table` (PLAN §1.1, §3.2, §5 S1).
 
 freeze  For N = 4..10, consume seed indices e = 0, 1, 2, ... in order; a draw is accepted iff
-        |F_eps| >= K_req(N); stop at 30 accepted draws per N. Every scanned draw (accepted or
+        |F_eps| >= K_req = 12 (every N, S1b); stop at 30 accepted draws per N. `k24_eligible` marks the
+        accepted draws with |F_eps| >= 24, the only draws of the K = 24 cells (N = 5, 6). Every scanned draw (accepted or
         rejected, with its |F_eps|) and every seed goes into seed_table.csv. For each accepted
         draw and q in {1.0, 1.5, 3.0}: inst_{inst_id}.npz and rulers_{inst_id}.npz. Then
         instances.parquet and CHECKSUMS (sha256 per file, plus the dataset sources).
@@ -29,7 +30,8 @@ from ..store.paths import (checksums_path, instances_dir, instances_parquet_path
                            reports_dir, rulers_path, seed_table_path)
 from .data import COV_FILE, RET_FILE, Market, default_dataset_dir, load_market
 from .draws import (DRAWS_PER_N, EPS, GA_RULES, MAX_SEED_INDEX, N_RESTARTS, N_VALUES, Q_VALUES,
-                    Draw, ga_seed, inst_id, k_req, make_draw, restart_seed)
+                    K24, K24_CELL_N, Draw, ga_seed, inst_id, k24_eligible, k_req, make_draw,
+                    restart_seed)
 from .encode import Encoding, encode, po_normalize, ret_cov_to_QUBO
 from .rulers import TIE_RTOL, Band, Rulers, band, rulers_from_band
 
@@ -130,6 +132,7 @@ def seed_row(s: DrawScan) -> dict:
         "N": d.N, "e": d.e, "draw_id": d.draw_id, "n": b.n, "draw_seed": d.seed,
         "F_eps": b.size, "K_req": k_req(d.N), "accepted": bool(s.accepted),
         "accept_rank": s.rank if s.rank is not None else "",
+        "k24_eligible": k24_eligible(b.size, s.accepted),
         "asset_idx": " ".join(str(int(i)) for i in d.asset_idx),
         "asset_idx_raw": " ".join(str(int(i)) for i in d.asset_idx_raw),
         "tickers": " ".join(d.tickers),
@@ -171,6 +174,7 @@ def build(N_values=N_VALUES, draws_per_n: int = DRAWS_PER_N, q_values=Q_VALUES,
                     "n_distinct": rul.n_distinct, "f_all_min": rul.f_all_min,
                     "f_all_max": rul.f_all_max, "boost_obj": float(enc.boost_obj),
                     "accept_rank": s.rank,
+                    "k24_eligible": k24_eligible(rul.F_size, True),
                     "inst_file": fi, "rulers_file": fr,
                     "inst_sha256": sha256_bytes(files[fi]), "rulers_sha256": sha256_bytes(files[fr]),
                     "harness_version": HARNESS_VERSION,
@@ -217,42 +221,65 @@ def checksums_text(files: dict, sources: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write(fz: Frozen, root=None, log=print) -> dict:
+def write(fz: Frozen, root=None, log=print, replace_set: bool = False) -> dict:
+    """Write a built set. Instance/ruler files are never overwritten with different bytes.
+
+    Default (strict): only an identical re-freeze or a freeze into an empty directory succeeds.
+    `replace_set=True` (used once, in S1b, when the acceptance rule changed before any downstream
+    use): surviving ids must still be byte-identical (else FreezeConflict, nothing touched); new
+    ids are written; the files of ids the new set no longer contains are deleted; seed_table.csv,
+    instances.parquet and CHECKSUMS are replaced.
+    """
     d = instances_dir(root)
     d.mkdir(parents=True, exist_ok=True)
     files = _all_files(fz)
+    tables = {seed_table_path("/").name, instances_parquet_path("/").name}
     conflicts = []
     for name, data in files.items():
         p = d / name
-        if p.exists() and p.read_bytes() != data:
+        if p.exists() and p.read_bytes() != data and not (replace_set and name in tables):
             conflicts.append(name)
     if conflicts:
         raise FreezeConflict(
             f"{len(conflicts)} frozen file(s) would change (e.g. {conflicts[:3]}). Instances are "
             "never overwritten: a changed instance needs a new id (suffix v2).")
-    written = skipped = 0
+    cp = checksums_path(root)
+    ck = checksums_text(files, fz.sources).encode()
+    stale = []
+    if replace_set:
+        listed = set(parse_checksums(cp)[0]) if cp.exists() else set()
+        on_disk = {p.name for pat in ("inst_*.npz", "rulers_*.npz") for p in d.glob(pat)}
+        stale = sorted(n for n in (listed | on_disk) - set(files) - tables
+                       if n.startswith(("inst_", "rulers_")) and n.endswith(".npz"))
+    elif cp.exists() and cp.read_bytes() != ck:
+        raise FreezeConflict("CHECKSUMS would change: the frozen set differs from this build "
+                             "(use replace_set only for a deliberate, logged change of the set)")
+    written = skipped = replaced = 0
     for name, data in files.items():
         p = d / name
         if p.exists():
-            skipped += 1
-            continue
+            if p.read_bytes() == data:
+                skipped += 1
+                continue
+            replaced += 1          # only the two tables can get here (replace_set)
+        else:
+            written += 1
         atomic_write_bytes(p, data)
-        written += 1
-    ck = checksums_text(files, fz.sources).encode()
-    cp = checksums_path(root)
-    if cp.exists() and cp.read_bytes() != ck:
-        raise FreezeConflict("CHECKSUMS would change although no instance file did")
-    if not cp.exists():
+    for name in stale:
+        (d / name).unlink(missing_ok=True)
+    if not cp.exists() or cp.read_bytes() != ck:
         atomic_write_bytes(cp, ck)
     if log:
-        log(f"wrote {written} file(s), {skipped} already frozen and identical; "
+        log(f"wrote {written} new file(s), {skipped} already frozen and identical, "
+            f"{replaced} table(s) replaced, {len(stale)} dropped file(s) removed; "
             f"{len(fz.instances)} instances, {len(fz.seed_table)} scanned draws -> {d}")
-    return {"written": written, "skipped": skipped}
+    return {"written": written, "skipped": skipped, "replaced": replaced, "removed": len(stale),
+            "removed_files": stale}
 
 
-def freeze(root=None, dataset_dir=None, log=print, **kw) -> Frozen:
+def freeze(root=None, dataset_dir=None, log=print, replace_set: bool = False, **kw) -> Frozen:
     fz = build(dataset_dir=dataset_dir, log=log, **kw)
-    write(fz, root, log=log)
+    write(fz, root, log=log, replace_set=replace_set)
     return fz
 
 
@@ -350,7 +377,7 @@ def table_markdown(root=None) -> str:
     inst = pd.read_parquet(instances_parquet_path(root))
     acc = seed[seed["accepted"]]
     L = []
-    L.append("# Frozen instances (S1)")
+    L.append("# Frozen instances (S1, acceptance revised in S1b)")
     L.append("")
     L.append(f"Generated by `gsp instances table` from `results/instances/` "
              f"(harness_version {HARNESS_VERSION}). Recipe: PLAN §1.1. "
@@ -360,7 +387,8 @@ def table_markdown(root=None) -> str:
     L.append("")
     L.append("## Draw acceptance per N")
     L.append("")
-    L.append("A draw is accepted iff |F_ε| ≥ K_req(N); seed indices e = 0, 1, 2, … are consumed in "
+    L.append("A draw is accepted iff |F_ε| ≥ 12 at every N (D-14 as revised in S1b; the S1 rule required 24 at "
+             "N = 5, 6 and rejected 133 of 163 draws at N = 5). Seed indices e = 0, 1, 2, … are consumed in "
              "order until 30 draws are accepted. Rejected draws stay in `seed_table.csv` with their |F_ε|.")
     L.append("")
     L.append("| N | n | K_req | scanned | accepted | rejected | rejected e (\\|F_ε\\|) |")
@@ -373,6 +401,20 @@ def table_markdown(root=None) -> str:
                  f"| {len(rej)} | {rej_s} |")
     L.append("")
     L.append(f"Total rejections: {int((~seed['accepted']).sum())}.")
+    L.append("")
+    L.append(f"## The K = {K24} subset")
+    L.append("")
+    L.append(f"The K = {K24} cells (N = {', '.join(str(N) for N in K24_CELL_N)}) run only on the accepted draws "
+             f"with |F_ε| ≥ {K24} (column `k24_eligible` in `seed_table.csv` and `instances.parquet`). They are "
+             "reported with their draw count and enter neither D1 nor D2's 12-cell grid. Other sizes are "
+             "listed for reference only.")
+    L.append("")
+    L.append(f"| N | K = {K24} cell | eligible draws (of accepted) | eligible e |")
+    L.append("|---|---|---|---|")
+    for N, g in seed.groupby("N"):
+        el = g[g["k24_eligible"].astype(bool)]
+        es = ", ".join(str(int(e)) for e in el["e"]) if N in K24_CELL_N else "—"
+        L.append(f"| {N} | {'yes' if N in K24_CELL_N else 'no'} | {len(el)}/{int(g['accepted'].sum())} | {es} |")
     L.append("")
     L.append("## |F_ε| per (N, K)")
     L.append("")

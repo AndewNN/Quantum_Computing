@@ -6,8 +6,8 @@ import pytest
 
 from gsp.cli import main as cli_main
 from gsp.instances import freeze as fz
-from gsp.instances.draws import (DRAWS_PER_N, K_REQ, N_VALUES, Q_VALUES, draw_seed, ga_seed,
-                                 inst_id, restart_seed)
+from gsp.instances.draws import (DRAWS_PER_N, K24, K_REQ, N_VALUES, Q_VALUES, draw_seed, ga_seed,
+                                 inst_id, k_req, restart_seed)
 from gsp.instances.instance import load_instance, load_rulers, load_seed_table
 from gsp.store import paths
 
@@ -30,7 +30,9 @@ def test_small_freeze_verify(small):
         assert row.draw_seed == draw_seed(row.N, row.e)
         assert row.restart_seed_r4 == restart_seed(row.N, row.e, 4)
         assert row.ga_seed_objective == ga_seed(row.N, row.e, 1)
-        assert row.accepted == (row.F_eps >= K_REQ.get(row.N, 0))
+        assert K_REQ == k_req(row.N) == row.K_req == 12
+        assert row.accepted == (row.F_eps >= 12)
+        assert row.k24_eligible == (row.accepted and row.F_eps >= K24)
     # seed indices are consumed in order, rejected ones included
     for N, g in seed.groupby("N"):
         assert list(g["e"]) == list(range(len(g)))
@@ -39,12 +41,36 @@ def test_small_freeze_verify(small):
 
 def test_freeze_idempotent_and_never_overwrites(small):
     res = fz.write(fz.build(N_values=(4, 5, 8), draws_per_n=3, log=None), small, log=None)
-    assert res == {"written": 0, "skipped": 56}    # 27 inst + 27 rulers + 2 tables
+    assert (res["written"], res["skipped"], res["replaced"], res["removed"]) == (0, 56, 0, 0)  # 27+27+2 tables
     # a different build for the same ids must be refused, not written
     other = fz.build(N_values=(4, 5, 8), draws_per_n=3, q_values=(1.0, 1.5, 2.0), log=None)
     with pytest.raises(fz.FreezeConflict):
         fz.write(other, small, log=None)
     assert fz.verify(root=small, log=lambda *a: None)
+
+
+def test_replace_set_keeps_survivors_and_drops_the_rest(tmp_path):
+    fz.freeze(root=tmp_path, N_values=(4, 5), draws_per_n=3, log=None)
+    d = paths.instances_dir(tmp_path)
+    before = {p.name: p.read_bytes() for p in d.glob("*.npz")}
+    # strict mode refuses a different set; nothing is touched
+    with pytest.raises(fz.FreezeConflict):
+        fz.freeze(root=tmp_path, N_values=(4, 5), draws_per_n=2, log=None)
+    assert {p.name: p.read_bytes() for p in d.glob("*.npz")} == before
+    # replace_set: survivors byte-identical, the dropped draws' files removed, tables regenerated
+    res = fz.write(fz.build(N_values=(4, 5), draws_per_n=2, log=None), tmp_path, log=None, replace_set=True)
+    after = {p.name: p.read_bytes() for p in d.glob("*.npz")}
+    assert res["removed"] == 12 and res["written"] == 0 and len(after) == 24
+    assert all(before[k] == v for k, v in after.items())
+    assert set(res["removed_files"]) == set(before) - set(after)
+    assert fz.verify(root=tmp_path, deep=True, log=lambda *a: None)
+    # a surviving id whose bytes would change is still refused under replace_set
+    victim = sorted(d.glob("inst_*.npz"))[0]
+    data = bytearray(victim.read_bytes())
+    data[len(data) // 2] ^= 0xFF
+    victim.write_bytes(bytes(data))
+    with pytest.raises(fz.FreezeConflict):
+        fz.write(fz.build(N_values=(4, 5), draws_per_n=2, log=None), tmp_path, log=None, replace_set=True)
 
 
 def test_verify_detects_tampering(tmp_path):
@@ -101,5 +127,13 @@ def test_real_freeze_complete_and_verified():
     seed = load_seed_table()
     acc = seed[seed["accepted"]]
     assert len(acc) == 210
-    assert (acc["F_eps"] >= acc["N"].map(lambda N: K_REQ.get(N, 0))).all()
-    assert "N05e000q1.5" in set(inst["inst_id"])
+    assert (acc["F_eps"] >= 12).all() and (seed.loc[~seed["accepted"], "F_eps"] < 12).all()
+    assert "N05e000q1.5" in set(inst["inst_id"]) and "N05e001q1.5" in set(inst["inst_id"])
+    # S1b numbers (uniform |F_eps| >= 12): rejections per N and the K = 24 subsets
+    rej = seed[~seed["accepted"]].groupby("N").size().reindex(N_VALUES, fill_value=0)
+    assert list(rej) == [83, 3, 2, 1, 0, 0, 0]
+    k24 = acc[acc["k24_eligible"]].groupby("N").size()
+    assert (k24.get(5), k24.get(6)) == (10, 21)
+    assert list(acc.loc[(acc["N"] == 5) & acc["k24_eligible"], "e"]) == [0, 7, 8, 15, 17, 19, 22, 24, 29, 31]
+    assert (inst.groupby("draw_id")["k24_eligible"].nunique() == 1).all()
+    assert inst["k24_eligible"].sum() == 3 * int(acc["k24_eligible"].sum())

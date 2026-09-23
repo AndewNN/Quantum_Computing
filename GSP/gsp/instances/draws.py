@@ -21,7 +21,9 @@ EPS = 0.1
 N_VALUES = tuple(range(4, 11))
 DRAWS_PER_N = 30
 Q_VALUES = (1.0, 1.5, 3.0)
-K_REQ = {4: 12, 5: 24, 6: 24, 7: 12}          # none at N >= 8
+K_REQ = 12                                     # |F_eps| >= 12 at every N (D-14, revised in S1b)
+K24 = 24                                       # the K = 24 cells (N = 5, 6) use accepted draws
+K24_CELL_N = (5, 6)                            #   with |F_eps| >= 24 only (PLAN §1.1, §1.2)
 N_RESTARTS = 5
 GA_RULES = ("violation", "objective")          # rule_idx 0, 1
 DUPLICATE_ASSET = False                        # the old default
@@ -41,7 +43,13 @@ def ga_seed(N: int, e: int, rule_idx: int) -> int:
 
 
 def k_req(N: int) -> int:
-    return K_REQ.get(N, 0)
+    """Acceptance threshold on |F_eps|: 12 at every N (S1b; S1 had 24 at N = 5, 6)."""
+    return K_REQ
+
+
+def k24_eligible(F_eps: int, accepted: bool = True) -> bool:
+    """An accepted draw whose band can host a K = 24 sector (used by the N = 5, 6 K = 24 cells)."""
+    return bool(accepted) and int(F_eps) >= K24
 
 
 def draw_id(N: int, e: int) -> str:

@@ -24,6 +24,10 @@ def test_envelope_draft_matches_plan():
     assert sum(c["connectivity"] == "ring" for c in cells) == 18      # A4's cells
     assert env["instances"]["q"] == [1.0, 1.5, 3.0]
     assert env["instances"]["total_instances"] == 7 * 30 * 3
+    assert env["instances"]["K_req"] == 12
+    k24 = [c for c in cells if c["K"] == 24]
+    assert all(c["draws"] == "k24_eligible" for c in k24)
+    assert all("draws" not in c for c in cells if c["K"] != 24)
 
 
 def test_simulator_calls_only_in_backend():
