@@ -7,6 +7,10 @@ S1:  gsp instances freeze [--N 4 5 ...] [--draws 30] [--results DIR] [--replace-
 S2:  gsp sectors build    [--N ...] [--no-extension] [--force] [--results DIR]
      gsp sectors tables | report [--no-write]
      gsp sectors pybind   --module-dir DIR --label NAME [--rules ...] [--N ...] [--seed-study N_SEEDS]
+S3:  gsp mixer counts                 (gate counts (ii)/(iii)/T of every confined cell and instance)
+     gsp mixer c1 [--engine numpy|cudaq] [--decomposed-n-max 10]   (C1 operator level, real sectors n <= 12)
+     gsp mixer time                   (GPU timing of the A1 circuit; one GPU process)
+     gsp mixer report [--no-write]    (reports/mixer_counts.md)
 Later sessions add plan, run, aggregate, report, missing, selfcheck.
 """
 
@@ -96,6 +100,40 @@ def _cmd_sectors(args) -> int:
     raise AssertionError(args.action)
 
 
+def _cmd_mixer(args) -> int:
+    from .compile import report
+
+    if args.action == "counts":
+        df = report.write_counts(args.results)
+        print(f"{len(df)} (cell, instance, order) rows")
+        return 0
+    if args.action == "c1":
+        orders = tuple(args.orders) if args.orders else ("lex", "rank")
+        sym = (False, True)
+        df = report.write_c1(args.results, engine=args.engine, decomposed_n_max=args.decomposed_n_max,
+                             ring_orders=orders, symmetrized=sym, limit=args.limit,
+                             log=lambda m: print(m, file=sys.stderr, flush=True))
+        print(f"{len(df)} checks; max leakage {df.leakage.max():.2e}, max block error {df.block_err.max():.2e}")
+        ok = bool((df.leakage <= 1e-13).all() and (df.block_err <= 1e-12).all())
+        return 0 if ok else 1
+    if args.action == "time":
+        from .compile import timing
+
+        out = timing.write(args.results, n_inst=args.n_inst, repeats=args.repeats, builder=not args.no_builder)
+        for r in out["rows"]:
+            print(f"{r['cell']:<22} {r['inst_id']} {r['engine']:<7} L={r['L']:<2} gates={r['n_gates']:>6} "
+                  f"build={r['build_s']:.3f}s first={r['first_observe_s']:.3f}s "
+                  f"observe={1e3 * r['observe_median_s']:.2f}ms get_state={1e3 * r['get_state_median_s']:.1f}ms")
+        return 0
+    if args.action == "report":
+        if args.no_write:
+            print(report.markdown(args.results))
+        else:
+            print(f"written to {report.write(args.results)}", file=sys.stderr)
+        return 0
+    raise AssertionError(args.action)
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="gsp", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -128,6 +166,22 @@ def main(argv=None) -> int:
     ps.add_argument("--seed-insts", nargs="+", default=["N05e008q1.5", "N06e000q1.5", "N07e000q1.5"],
                     help="pybind: instances of the seed study")
     ps.set_defaults(func=_cmd_sectors)
+
+    pm = sub.add_parser("mixer", help="compiled preserving mixer: counts, C1 operator check, timing, report (S3)")
+    pm.add_argument("action", choices=["counts", "c1", "time", "report"])
+    pm.add_argument("--results", default=None)
+    pm.add_argument("--engine", choices=["numpy", "cudaq", "builder"], default="numpy",
+                    help="c1: numpy | cudaq (interpreter kernel) | builder (PLAN §2.4 builder kernels, slow JIT)")
+    pm.add_argument("--decomposed-n-max", type=int, default=10,
+                    help="c1: also run the explicit (iii) circuit at n <= this (0 = never)")
+    pm.add_argument("--limit", type=int, default=None, help="c1: only the first LIMIT sectors (tests)")
+    pm.add_argument("--orders", nargs="+", choices=["lex", "rank"], default=None,
+                    help="c1: ring orders (default lex rank; symmetrized lex is always added)")
+    pm.add_argument("--n-inst", type=int, default=3, help="time: instances per cell")
+    pm.add_argument("--repeats", type=int, default=10, help="time: steady-state observe calls per circuit")
+    pm.add_argument("--no-builder", action="store_true", help="time: interpreter engine only")
+    pm.add_argument("--no-write", action="store_true", help="report: print only")
+    pm.set_defaults(func=_cmd_mixer)
 
     px = sub.add_parser("index", help="rebuild the run registry from every run.json")
     px.add_argument("--results", default=None)

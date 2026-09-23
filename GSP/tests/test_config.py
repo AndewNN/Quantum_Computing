@@ -49,6 +49,8 @@ def test_simulator_calls_only_in_backend():
 
 
 def test_kernels_only_in_circuits():
+    """Kernels (decorated or builder API) are made only in gsp/circuits/ (PLAN §3.5)."""
     offenders = [str(p.relative_to(GSP_ROOT)) for p in (GSP_ROOT / "gsp").rglob("*.py")
-                 if "@cudaq.kernel" in p.read_text() and p.parent.name != "circuits"]
+                 if ("@cudaq.kernel" in p.read_text() or "make_kernel(" in p.read_text())
+                 and p.parent.name != "circuits"]
     assert not offenders, offenders

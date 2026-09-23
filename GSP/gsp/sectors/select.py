@@ -101,6 +101,15 @@ class Job:
         return [K for K in K_ALL if K <= self.F_size]
 
 
+def cell_instances(cell: dict, root=None) -> list[str]:
+    """The inst_ids of one §1.2 cell, in accept order then q (S3): every accepted draw of the cell's N
+    (the `k24_eligible` subset for K = 24), three q each. Violation cells share a sector per draw."""
+    seed = load_seed_table(root)
+    it = load_instances_table(root)
+    rows = _accepted(seed, int(cell["N"]), k24_only=cell.get("draws") == "k24_eligible")
+    return [i for row in rows.itertuples() for i in _q_ids(it, row.draw_id)]
+
+
 def plan_jobs(root=None, extension: bool = True, N_values=None) -> list[Job]:
     """The GA jobs of the §1.2 cells (and, with `extension`, the N = 8..10 timing jobs)."""
     seed = load_seed_table(root)
