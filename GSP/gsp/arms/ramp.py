@@ -50,14 +50,17 @@ class A2(Arm):
                          seed_ga=sv.seed_ga,
                          extras=make_extras(**extras, ring_order=ring_order, sector_source=sector_source))
 
+    def ansatz(self, cfg: RunConfig, inst, root=None) -> tuple:
+        p = int(cfg.effort)
+        if self.encoding == "penalty":
+            return penalty_arm_ansatz(inst, cfg.lam, p), None
+        A, sv = confined_arm_ansatz(inst, cfg, p, root)
+        return A, sv.idx
+
     def execute(self, cfg: RunConfig, inst, rulers, cell, logger: bool = True, root=None) -> Outcome:
         t0 = time.perf_counter()
         p = int(cfg.effort)
-        if self.encoding == "penalty":
-            A, sector_idx = penalty_arm_ansatz(inst, cfg.lam, p), None
-        else:
-            A, sv = confined_arm_ansatz(inst, cfg, p, root)
-            sector_idx = sv.idx
+        A, sector_idx = self.ansatz(cfg, inst, root)
         params = ramp_params(p, cfg.extra("ramp_dbeta"), cfg.extra("ramp_dgamma"), A.alpha, cfg.extra("ramp_sign"))
         ctx = metric_context(inst, rulers, cfg.lam if A.kind == "penalty" else None, sector_idx=sector_idx)
         setup_s = time.perf_counter() - t0

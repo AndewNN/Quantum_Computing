@@ -74,6 +74,11 @@ def sample(kernel, *args, shots_count: int = 1000) -> dict[str, int]:
     return {k: int(v) for k, v in result.items()}
 
 
+def set_random_seed(seed: int) -> None:
+    """Seed CUDA-Q's sampling RNG (the 1000-shot check of AR_best_S draws after this; S5)."""
+    _cudaq().set_random_seed(int(seed))
+
+
 def get_state(kernel, *args) -> np.ndarray:
     """Statevector in CUDA-Q order (q_0 = LSB). Not for update loops."""
     ensure_target()

@@ -18,7 +18,15 @@ S4:  gsp arms smoke                   (every §1.2 cell at N = 4: A0 / A1 / A2p 
      gsp arms report [--no-write]     (reports/arms.md from the tables above and s4_legacy.json)
      gsp arms run --arm A1 --inst N04e004q1.5 --effort 5 [--K 12 --rule violation --conn ring] [--lam ...]
      (scripts/s4_legacy_checks.py: the legacy-equivalence numbers, results/tables/s4_legacy.json)
-Later sessions add plan, run, aggregate, report, missing, selfcheck.
+S5:  gsp metrics finalize [--arms A0 ...] [--limit N] [--force]
+                                      (GPU: samples.npz + postrun.json for the stored runs that lack them)
+     gsp metrics checks               (the S5 evidence -> results/tables/s5_checks.json)
+     gsp metrics report [--no-write]  (reports/metrics.md)
+     gsp aggregate [--rebuild]        (results/tables/metrics.parquet, one row per done run; incremental)
+     gsp stats gbar                   (results/tables/gbar.parquet: gbar_arm(N) of Rule D1 from the frozen set)
+     gsp stats d1 [--lam-star 4=0.005 5=...] [--ring-order lex]
+                                      (Rule D1 over the stored runs -> results/tables/d1.parquet, d1_choices.parquet)
+Later sessions add plan, run, report, missing, selfcheck.
 """
 
 from __future__ import annotations
@@ -187,6 +195,80 @@ def _cmd_arms(args) -> int:
     raise AssertionError(args.action)
 
 
+def _cmd_metrics(args) -> int:
+    log = lambda m: print(m, file=sys.stderr, flush=True)   # noqa: E731
+    if args.action == "finalize":
+        from .metrics.postrun import finalize_all
+        from .sim import backend
+        busy = backend.gpu_compute_pids()
+        if busy:
+            print(f"GPU busy (compute PIDs {busy}); one GPU process at a time", file=sys.stderr)
+            return 3
+        out = finalize_all(args.results, arms=args.arms, limit=args.limit, force=args.force,
+                           log=log if args.verbose else None)
+        print(json.dumps(out))
+        return 0 if out["failed"] == 0 else 1
+    if args.action == "checks":
+        from .metrics import checks
+        out = checks.run_all(args.results, log=log)
+        print(json.dumps({"example_max_error": out["example"]["max_error"], "d1_ok": out["d1"]["all_ok"],
+                          "d2_verdicts_ok": out["d2"]["verdicts_ok"], "c1_ok": out["c1"]["all_ok"],
+                          "simdiff_max_F_diff": out["simdiff"]["max_F_diff"]}, indent=1))
+        return 0
+    if args.action == "report":
+        from .metrics import report
+        if args.no_write:
+            print(report.markdown(args.results))
+        else:
+            print(f"written to {report.write(args.results)}", file=sys.stderr)
+        return 0
+    raise AssertionError(args.action)
+
+
+def _cmd_aggregate(args) -> int:
+    from .metrics.aggregate import aggregate
+    df = aggregate(args.results, rebuild_all=args.rebuild, log=lambda m: print(m, file=sys.stderr, flush=True))
+    if not df.empty:
+        bad = df[df["anomalies"] != ""]
+        print(f"{len(df)} rows; {len(bad)} with anomalies")
+        if len(bad):
+            print(bad.groupby(["arm", "anomalies"]).size().to_string())
+    return 0
+
+
+def _cmd_stats(args) -> int:
+    from .stats import d1
+    from .store.paths import tables_dir
+    out = tables_dir(args.results)
+    out.mkdir(parents=True, exist_ok=True)
+    if args.action == "gbar":
+        t = d1.gbar_table(root=args.results)
+        t.to_parquet(out / "gbar.parquet", index=False)
+        print(t.pivot(index="N", columns="arm", values="gbar").to_string())
+        return 0
+    if args.action == "d1":
+        lam = {int(k): float(v) for k, v in (x.split("=") for x in (args.lam_star or []))} or None
+        curves = d1.curves_from_store(args.results, d1.d1_spec(lam, args.ring_order))
+        if curves.empty:
+            print("no runs match the D1 filters")
+            return 0
+        gp = out / "gbar.parquet"
+        if gp.exists():
+            import pandas as pd
+            g = pd.read_parquet(gp)
+            gbar = {(int(r.N), r.arm): float(r.gbar) for r in g.itertuples()}
+        else:
+            gbar = {}
+        res = d1.run_d1(curves, gbar)
+        res["pairs"].to_parquet(out / "d1.parquet", index=False)
+        if not res["choices"].empty:
+            res["choices"].to_parquet(out / "d1_choices.parquet", index=False)
+        p = res["pairs"]
+        print(p.groupby(["N", "pairing", "family", "outcome"]).size().to_string())
+        return 0
+    raise AssertionError(args.action)
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="gsp", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -250,6 +332,28 @@ def main(argv=None) -> int:
     pa.add_argument("--restart", type=int, default=0)
     pa.add_argument("--schedule", default="primary")
     pa.set_defaults(func=_cmd_arms)
+
+    pmt = sub.add_parser("metrics", help="post-run step, S5 checks and report (PLAN §1.7, §5 S5)")
+    pmt.add_argument("action", choices=["finalize", "checks", "report"])
+    pmt.add_argument("--results", default=None)
+    pmt.add_argument("--arms", nargs="+", default=None, help="finalize: only these arms")
+    pmt.add_argument("--limit", type=int, default=None, help="finalize: at most this many new runs")
+    pmt.add_argument("--force", action="store_true", help="finalize: redo runs that already have the files")
+    pmt.add_argument("--verbose", action="store_true", help="finalize: one line per run")
+    pmt.add_argument("--no-write", action="store_true", help="report: print only")
+    pmt.set_defaults(func=_cmd_metrics)
+
+    pag = sub.add_parser("aggregate", help="results/tables/metrics.parquet from every done run (S5)")
+    pag.add_argument("--results", default=None)
+    pag.add_argument("--rebuild", action="store_true", help="recompute every row (default: incremental)")
+    pag.set_defaults(func=_cmd_aggregate)
+
+    pst = sub.add_parser("stats", help="Rule D1 inputs and tables (S5)")
+    pst.add_argument("action", choices=["gbar", "d1"])
+    pst.add_argument("--results", default=None)
+    pst.add_argument("--lam-star", nargs="+", default=None, help="d1: lambda*(N) as N=LAM (S9); default: no filter")
+    pst.add_argument("--ring-order", default="lex", choices=["lex", "rank"], help="d1: A1 / A2c ring order (D-9)")
+    pst.set_defaults(func=_cmd_stats)
 
     px = sub.add_parser("index", help="rebuild the run registry from every run.json")
     px.add_argument("--results", default=None)

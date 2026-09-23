@@ -52,5 +52,5 @@ def load_registry(root=None, rebuild: bool = False) -> pd.DataFrame:
 def load_metrics(root=None) -> pd.DataFrame:
     p = tables_dir(root) / "metrics.parquet"
     if not p.exists():
-        raise FileNotFoundError(f"{p} does not exist yet (written by `gsp aggregate`, S6)")
+        raise FileNotFoundError(f"{p} does not exist yet (written by `gsp aggregate`, S5)")
     return pd.read_parquet(p)

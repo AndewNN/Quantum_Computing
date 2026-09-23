@@ -81,6 +81,12 @@ class Ansatz:
         from ..sim import backend
         return backend.get_state_classical(program.layered_kernel(), self.n, *self.prog.args(params))
 
+    def sample(self, params, shots: int = 1000) -> dict[str, int]:
+        """`shots` measurements of the final state in the computational basis (backend.sample; keys have x_0
+        first, i.e. read as binary they are classical indices). Post-run check of AR_best_S (S5)."""
+        from ..sim import backend
+        return backend.sample(program.layered_kernel(), *self.prog.args(params), shots_count=int(shots))
+
     def unrolled(self) -> list:
         """The flat simulation gate list (for the numpy simulator / the interpreter in tests)."""
         return program.unroll_layered(self.start, self.layer, self.L)

@@ -45,6 +45,17 @@ def restart_seed(draw_id: str, r: int, root=None) -> int:
     return int(row.iloc[0][f"restart_seed_r{int(r)}"])
 
 
+def make_arm(name: str) -> "Arm":
+    """An arm instance by its name in run.json (the post-run step rebuilds circuits through it; S7 / S8 add A3,
+    A3d, A4, A6 here)."""
+    from .qaoa import A0, A1
+    from .ramp import A2
+    table = {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined")}
+    if name not in table:
+        raise KeyError(f"no arm class registered for {name!r}")
+    return table[name]()
+
+
 def draw_of(inst_id: str) -> str:
     return inst_id.split("q")[0]
 
@@ -89,6 +100,25 @@ class RunConfig:
 
 def make_extras(**kw) -> tuple:
     return tuple(sorted((k, v) for k, v in kw.items() if v is not None))
+
+
+_CORE_KEYS = ("arm", "encoding", "inst_id", "effort_kind", "effort", "K", "rule", "connectivity", "restart", "lam",
+              "schedule", "seed", "seed_ga", "harness_version")
+
+
+def runconfig_from_record(rec: dict) -> RunConfig:
+    """The RunConfig of a stored run.json (its hash must reproduce the stored run_id)."""
+    from ..store.records import config_of
+    cfg = config_of(rec)
+    extras = tuple(sorted((k, v) for k, v in cfg.items() if k not in _CORE_KEYS))
+    rc = RunConfig(arm=cfg["arm"], encoding=cfg["encoding"], inst_id=cfg["inst_id"], effort_kind=cfg["effort_kind"],
+                   effort=int(cfg["effort"]), K=cfg.get("K"), rule=cfg.get("rule"),
+                   connectivity=cfg.get("connectivity"), restart=int(cfg.get("restart", 0)), lam=cfg.get("lam"),
+                   schedule=cfg.get("schedule"), seed=cfg.get("seed"), seed_ga=cfg.get("seed_ga"), extras=extras,
+                   harness_version=cfg["harness_version"])
+    if rec.get("run_id") is not None and rc.run_id != rec["run_id"]:
+        raise ValueError(f"run.json {rec['run_id']}: the rebuilt config hashes to {rc.run_id}")
+    return rc
 
 
 @dataclass
@@ -143,11 +173,17 @@ class Arm:
     def execute(self, cfg: RunConfig, instance, rulers, cell, logger: bool = True, root=None) -> Outcome:  # pragma: no cover
         raise NotImplementedError
 
+    def ansatz(self, cfg: RunConfig, inst, root=None) -> tuple:  # pragma: no cover (abstract)
+        """(Ansatz, sector_idx or None) of a config: what `execute` runs, rebuilt by the post-run step (S5)."""
+        raise NotImplementedError
+
     def run(self, instance, cell, effort, seed=None, *, rulers=None, root=None, runs_root=None,
-            store: bool = True, logger: bool = True, force: bool = False, **kw) -> RunRecord:
+            store: bool = True, logger: bool = True, force: bool = False, finalize: bool = True,
+            **kw) -> RunRecord:
         """Run (or load) one configuration. `instance` is an `Instance` (frozen or ad hoc) or an inst_id.
         `root` is where instances / sectors / the seed table are read; `runs_root` (default: root) is where the
-        run directory is written."""
+        run directory is written. `finalize` (stored runs only): the S5 post-run step -- the 1000-shot sample
+        (samples.npz) and the final-state metrics (postrun.json), `gsp.metrics.postrun.finalize_run`."""
         from ..instances.adhoc import load_any
         from ..sim import backend
         from ..store.paths import inst_path
@@ -192,6 +228,9 @@ class Arm:
                 atomic_write_bytes(path / "final_state.npy", buf.getvalue())
             write_record(rec, out_root)
             assert run_json_path(rec, root=out_root).exists()
+            if finalize:
+                from ..metrics.postrun import finalize_run
+                finalize_run(path, root=root, final_state=out.final_state, catch=True)
         return RunRecord(record=rec, trajectory=out.trajectory, counts=out.counts, path=path)
 
 

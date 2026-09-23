@@ -1,5 +1,6 @@
-"""Rule C1, operator level for A1's compiled mixer (PLAN §1.7, §5 S3). S8 adds A4's generator check
-and the state-level rule.
+"""Rule C1 (PLAN §1.7): operator level for A1's compiled mixer (S3); the state-level pieces -- leakage, the
+eps_num calibration on random A1 circuits, the pass / fail rule and the leakage-vs-D growth-exponent fit (S5, at
+the end of this module). S8 adds A4's generator check and runs the state level along A4.
 
 `a1_operator_level` evolves every kept basis string |u_j> through one compiled mixer layer and compares
 the circuit's action with the dense ordered product in K x K (`preserving.dense_layer`, not
@@ -106,3 +107,105 @@ def star_prep_fidelity(circ: pr.PreservingCircuit, engine: str = "numpy", decomp
     mask[order] = False
     return {"fidelity": fid, "infidelity": 1.0 - fid, "min_amp": float(v[order].real.min()),
             "max_imag": float(np.abs(v[order].imag).max()), "leakage": float(np.abs(v[mask]).max())}
+
+
+# --- S5: the state level and the growth-exponent fit ----------------------------------------------------------
+# PLAN §1.7 Rule C1, state level: max_k [1 - p_feas(psi_k)] along A4 must stay <= 10 x eps_num(n, D), where
+# eps_num(n, D) is the maximum leakage over 10 random A1 ring circuits on the same sector with enough layers to
+# match A4's count of multi-controlled gates at step k; the leakage-vs-D exponent separates accumulated rounding
+# (sqrt(D), diffusive) from a systematic violation (linear in D). S8 runs it on A4; S5 provides the pieces:
+#   leakage(psi, sector_idx)             1 - p_sector (the estimator used on both sides: it includes the norm drift)
+#                                        and the out-of-sector mass
+#   mc_gate_count(gates)                 multi-controlled gates of a gate list (names "mc*")
+#   eps_num_curve(...)                   eps_num at a list of layer counts L (random Eq. 4.11 parameters)
+#   state_level(leak_k, eps_num_k)       the pass / fail of the state-level rule
+#   growth_exponent(D, leak)             log-log OLS slope with its 95 % t interval and the classification
+
+SQRT_D, LINEAR_D = 0.5, 1.0
+STATE_FACTOR = 10.0
+N_CALIB_CIRCUITS = 10
+
+
+def leakage(psi, sector_idx) -> dict:
+    """leak = 1 - p_sector (signed; rounding makes it either sign), out_mass = the mass outside the sector summed
+    directly, norm_err = sum |psi|^2 - 1."""
+    p = np.abs(np.asarray(psi)) ** 2
+    mask = np.zeros(p.size, dtype=bool)
+    mask[np.asarray(sector_idx, dtype=np.int64)] = True
+    ins = float(p[mask].sum())
+    return {"leak": 1.0 - ins, "out_mass": float(p[~mask].sum()), "norm_err": float(p.sum()) - 1.0}
+
+
+def mc_gate_count(gates) -> int:
+    return int(sum(1 for g in gates if g.name.startswith("mc")))
+
+
+def eps_num_curve(inst, circ: pr.PreservingCircuit, L_values, seed: int, n_circuits: int = N_CALIB_CIRCUITS,
+                  engine: str = "numpy") -> list[dict]:
+    """eps_num at each L: the max over n_circuits random A1 circuits (star prep + L x (cost + mixer), Eq. 4.11
+    parameters; gamma ~ U[-pi/kappa, pi/kappa], beta ~ U[-pi, pi], drawn from default_rng(seed) in order) of
+    |1 - p_sector| of the final state (the magnitude: rounding gives either sign). engine "numpy" (npsim) or "cudaq" (the layered kernel's get_state; a
+    post-run diagnostic, never an update loop). `seed` must come from the seed table (the draw's restart seed)."""
+    from ..circuits.ansatz import confined_ansatz
+    rng = np.random.default_rng(int(seed))
+    out = []
+    for L in L_values:
+        A = confined_ansatz(inst.H_obj, inst.boost_obj, circ, int(L))
+        mm = np.pi / A.kappa_min()
+        mc = mc_gate_count(A.abstract_gates())
+        leaks = []
+        for _ in range(n_circuits):
+            th = np.r_[rng.uniform(-mm, mm, int(L)), rng.uniform(-np.pi, np.pi, int(L))]
+            if engine == "numpy":
+                from ..compile import npsim
+                psi = npsim.flat(npsim.apply(A.unrolled(), npsim.columns(A.n, [0]), th))[:, 0]
+            elif engine == "cudaq":
+                psi = A.state(th)
+            else:
+                raise ValueError(engine)
+            leaks.append(leakage(psi, circ.order))
+        out.append({"L": int(L), "mc_gates": mc, "eps_num": max(abs(r["leak"]) for r in leaks),
+                    "max_signed_leak": max(r["leak"] for r in leaks),
+                    "max_out_mass": max(r["out_mass"] for r in leaks), "n_circuits": n_circuits, "engine": engine})
+    return out
+
+
+def state_level(leak_k, eps_num_k, factor: float = STATE_FACTOR) -> dict:
+    """PLAN §1.7: falsified iff max_k leak_k > factor x eps_num(n, D_k) at some k (eps_num_k aligned with k)."""
+    leak_k = np.asarray(leak_k, dtype=np.float64)
+    eps_k = np.asarray(eps_num_k, dtype=np.float64)
+    thr = factor * np.abs(eps_k)
+    over = leak_k > thr
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(thr > 0, leak_k / thr, np.where(leak_k > 0, np.inf, 0.0))
+    return {"max_leak": float(leak_k.max()) if leak_k.size else float("nan"),
+            "max_ratio": float(np.max(ratio)) if ratio.size else float("nan"),
+            "passes": bool(not over.any()), "first_fail_k": int(np.argmax(over)) if over.any() else None}
+
+
+def growth_exponent(D, leak, level: float = 0.95) -> dict:
+    """Fit log|leak| = a + b log D (OLS; zero leaks dropped). Classification: the reference exponent nearer to b
+    (0.5 = accumulated rounding, 1 = a systematic rate), provided the 95 % t interval of b excludes the other one;
+    else 'ambiguous'. (Requiring the interval to CONTAIN the nearer reference would reject a clean sqrt(D) signal:
+    the max over circuits of one set of random walks has autocorrelated residuals, so its OLS interval is narrow
+    and biased low, e.g. 0.39 [0.35, 0.43] on synthetic sqrt(D) data.)"""
+    from scipy import stats as st
+    D = np.asarray(D, dtype=np.float64)
+    y = np.abs(np.asarray(leak, dtype=np.float64))
+    ok = (D > 0) & (y > 0) & np.isfinite(y)
+    x, yy = np.log(D[ok]), np.log(y[ok])
+    if x.size < 3 or np.unique(x).size < 2:
+        return {"exponent": float("nan"), "lo": float("nan"), "hi": float("nan"), "n": int(x.size),
+                "dropped": int((~ok).sum()), "class": "ambiguous"}
+    r = st.linregress(x, yy)
+    tq = st.t.ppf(0.5 + level / 2, x.size - 2)
+    lo, hi = r.slope - tq * r.stderr, r.slope + tq * r.stderr
+    b = r.slope
+    if abs(b - SQRT_D) < abs(b - LINEAR_D) and hi < LINEAR_D:
+        cls = "sqrt(D)"
+    elif abs(b - LINEAR_D) < abs(b - SQRT_D) and lo > SQRT_D:
+        cls = "linear"
+    else:
+        cls = "ambiguous"
+    return {"exponent": float(r.slope), "lo": float(lo), "hi": float(hi), "se": float(r.stderr),
+            "intercept": float(r.intercept), "n": int(x.size), "dropped": int((~ok).sum()), "class": cls}
