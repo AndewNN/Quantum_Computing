@@ -19,6 +19,8 @@ struct Individual {
     // std::vector<int> quantities;
     double fitness = -1.0; // Cost function value
     double total_cost = -1.0; // price of bitstring
+    double objective = 0.0; // H_obj = q w^T cov w - ret^T w, w = quantity * price / budget (objective-aware mode only)
+    bool in_band = false;   // |total_cost - budget| <= band * budget (objective-aware mode only)
 
     bool operator<(const Individual& other) const {
         if (fitness != other.fitness)
@@ -39,7 +41,15 @@ public:
         double mutation_rate,
         double crossover_rate,
         int elitism_count,
-        int tournament_size
+        int tournament_size,
+        // Objective-aware mode (proposal Ch. 6: "a genetic-algorithm fitness combining violation and H_obj"), on when
+        // `returns` is given. Feasibility rules: a string inside the budget band beats any string outside it; two strings
+        // inside are ranked by H_obj; two outside by the budget gap. No weight between the two terms: only the band.
+        const std::vector<double>& returns = {},
+        const std::vector<std::vector<double>>& covariance = {},
+        double q = 0.0,
+        double band = -1.0,
+        long long seed = -1   // -1: std::random_device, as before
     ) : n_assets(prices.size()),
         asset_bit_lengths(asset_bit_lengths),
         prices(prices),
@@ -50,7 +60,12 @@ public:
         elitism_count(elitism_count),
         tournament_size(tournament_size),
         total_bits(0),
-        rng(std::random_device{}())
+        returns(returns),
+        covariance(covariance),
+        q(q),
+        band(band),
+        objective_aware(!returns.empty()),
+        rng(seed >= 0 ? static_cast<std::mt19937::result_type>(seed) : std::random_device{}())
         // rng(919)
     {
         start_ga = clk::now();
@@ -59,6 +74,15 @@ public:
         }
         if (elitism_count >= population_size) {
             throw std::invalid_argument("Elitism count must be less than population size.");
+        }
+        if (objective_aware) {
+            if (returns.size() != prices.size() || covariance.size() != prices.size())
+                throw std::invalid_argument("Objective-aware mode: returns and covariance must have one entry per asset.");
+            for (const auto& row : covariance)
+                if (row.size() != prices.size())
+                    throw std::invalid_argument("Objective-aware mode: covariance must be square.");
+            if (!(band > 0.0))
+                throw std::invalid_argument("Objective-aware mode: band (relative budget tolerance, e.g. 0.1) must be positive.");
         }
 
         total_bits = std::accumulate(asset_bit_lengths.begin(), asset_bit_lengths.end(), 0);
@@ -200,6 +224,11 @@ private:
     double crossover_rate;
     int elitism_count;
     int tournament_size;
+    std::vector<double> returns;                  // objective-aware mode: expected return per asset
+    std::vector<std::vector<double>> covariance;  // objective-aware mode: return covariance between assets
+    double q;                                     // objective-aware mode: risk weight
+    double band;                                  // objective-aware mode: relative budget tolerance (epsilon)
+    bool objective_aware;
     mutable clk::time_point start_ga, finish_ga;
 
     mutable std::vector<Individual> population;
@@ -225,22 +254,53 @@ private:
     void calculate_fitness(Individual& individual) const {
         double current_total_cost = 0.0;
         int curr_bit_idx = 0;
+        std::vector<double> weights(objective_aware ? n_assets : 0);   // empty (no allocation) in budget mode
         for (int i = 0; i < n_assets; ++i) {
             int quantity = 0;
             for (int b = 0; b < asset_bit_lengths[i]; ++b) {
                 quantity = (quantity << 1) | individual.chromosome[curr_bit_idx + b];
             }
             current_total_cost += quantity * prices[i];
+            if (objective_aware) weights[i] = quantity * prices[i] / budget;
             curr_bit_idx += asset_bit_lengths[i];
         }
         individual.total_cost = current_total_cost;
 
         double diff = current_total_cost - budget;
         individual.fitness = diff * diff;
+
+        if (objective_aware) {
+            // the same H_obj as the circuit: -(ret_bb^T x - q x^T cov_bb x) of po_normalize / ret_cov_to_QUBO, in weights
+            double risk = 0.0, ret = 0.0;
+            for (int i = 0; i < n_assets; ++i) {
+                ret += returns[i] * weights[i];
+                for (int j = 0; j < n_assets; ++j) risk += weights[i] * covariance[i][j] * weights[j];
+            }
+            individual.objective = q * risk - ret;
+            individual.in_band = std::abs(diff) <= band * budget;
+        }
+    }
+
+    // a ranks above b. Budget mode: smaller budget gap (unchanged). Objective-aware mode: feasibility rules.
+    bool better(const Individual& a, const Individual& b) const {
+        if (!objective_aware) return a.fitness < b.fitness;
+        if (a.in_band != b.in_band) return a.in_band;
+        return a.in_band ? a.objective < b.objective : a.fitness < b.fitness;
     }
 
     void sort_population() const {
-        std::sort(population.begin(), population.end());
+        if (!objective_aware) {
+            std::sort(population.begin(), population.end());
+            return;
+        }
+        // total order with the same ties as Individual::operator<, so equal chromosomes stay adjacent (get_top_n_individuals)
+        std::sort(population.begin(), population.end(), [](const Individual& a, const Individual& b) {
+            if (a.in_band != b.in_band) return a.in_band;
+            const double ka = a.in_band ? a.objective : a.fitness, kb = b.in_band ? b.objective : b.fitness;
+            if (ka != kb) return ka < kb;
+            if (a.total_cost != b.total_cost) return a.total_cost < b.total_cost;
+            return a.chromosome < b.chromosome;
+        });
     }
     
     void evolve_new_generation() {
@@ -279,7 +339,7 @@ private:
         
         for (int i = 1; i < tournament_size; ++i) {
             const auto& contender = population[dist(rng)];
-            if (contender.fitness < best_in_tournament.fitness) {
+            if (better(contender, best_in_tournament)) {
                 best_in_tournament = contender;
             }
         }
@@ -404,13 +464,16 @@ PYBIND11_MODULE(ga_solver, m) {
         .def_readwrite("chromosome", &Individual::chromosome)
         .def_readwrite("fitness", &Individual::fitness)
         .def_readwrite("total_cost", &Individual::total_cost)
+        .def_readwrite("objective", &Individual::objective)
+        .def_readwrite("in_band", &Individual::in_band)
         .def("__repr__", [](const Individual &i) {
             return "<ga_solver.Individual fitness=" + std::to_string(i.fitness) +
                    " cost=" + std::to_string(i.total_cost) + ">";
         });
 
     py::class_<GeneticAlgorithm>(m, "GeneticAlgorithm")
-        .def(py::init<const std::vector<double>&, const std::vector<int>&, double, int, double, double, int, int>(),
+        .def(py::init<const std::vector<double>&, const std::vector<int>&, double, int, double, double, int, int,
+                      const std::vector<double>&, const std::vector<std::vector<double>>&, double, double, long long>(),
              py::arg("prices"),
              py::arg("asset_bit_lengths"),
              py::arg("budget"),
@@ -418,7 +481,15 @@ PYBIND11_MODULE(ga_solver, m) {
              py::arg("mutation_rate"),
              py::arg("crossover_rate"),
              py::arg("elitism_count"),
-             py::arg("tournament_size"))
+             py::arg("tournament_size"),
+             py::arg("returns") = std::vector<double>{},
+             py::arg("covariance") = std::vector<std::vector<double>>{},
+             py::arg("q") = 0.0,
+             py::arg("band") = -1.0,
+             py::arg("seed") = -1,
+             "Budget mode (default): rank by squared budget gap. Objective-aware mode (pass returns, covariance, q, band):\n"
+             "a string inside the band |cost - budget| <= band * budget beats any string outside it; inside, lower H_obj\n"
+             "= q w^T cov w - returns^T w (w = quantity * price / budget) wins; outside, the smaller gap wins. seed >= 0 fixes the RNG.")
         .def("run", &GeneticAlgorithm::run,
              py::arg("generations"), py::arg("verbose") = true,
              "Run the genetic algorithm for a number of generations.")

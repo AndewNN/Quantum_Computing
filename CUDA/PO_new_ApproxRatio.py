@@ -233,6 +233,12 @@ if __name__ == "__main__":
             action="store_true", default=False,
             help="Use Genetic Algorithm for feasible set approximation"
         )
+        # objective-aware selection (proposal Ch. 6): GA keeps the band strings with the lowest H_obj
+        parser.add_argument(
+            "--GA_OBJ",
+            action="store_true", default=False,
+            help="Objective-aware GA (implies --GA): inside the budget band rank by H_obj, outside by budget gap"
+        )
 
         # Random init
         parser.add_argument(
@@ -348,7 +354,8 @@ if __name__ == "__main__":
     delta_beta = args.delta_beta
     delta_gamma = args.delta_gamma
     learning_rate_scale = args.learning_rate_scale
-    is_GA = args.GA
+    GA_OBJ = args.GA_OBJ
+    is_GA = args.GA or GA_OBJ
     population_size = 2000
     generations = 35
     crossover_rate = 0.85
@@ -407,7 +414,7 @@ if __name__ == "__main__":
     print(f"Results will be saved in: {dir_path}")
     # file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{hamiltonian_P_boost if mode == 'Preserving' else hamiltonian_X_boost if mode == 'X' else hamiltonian_R_boost}"
     file_postfix = f"{mode}{'' if mode == 'X' else str(delta_beta)+'_'+str(delta_gamma) if mode == 'Ramp' else str(num_init_bases)}_boost_{auto_boost_mode}"
-    file_postfix += ("_GA" if mode == "Preserving" and is_GA else "")
+    file_postfix += (("_GAobj" if GA_OBJ else "_GA") if mode == "Preserving" and is_GA else "")
     report_name = f"report_{file_postfix}.csv"
     expect_name = f"expectation_{file_postfix}.npz"
 
@@ -498,7 +505,8 @@ if __name__ == "__main__":
                     mutation_rate=mutation_rate,
                     crossover_rate=crossover_rate,
                     elitism_count=elitism_count,
-                    tournament_size=tournament_size
+                    tournament_size=tournament_size,
+                    **(dict(returns=data_ret, covariance=data_cov, q=Q, band=float(eps[idx_asset])) if GA_OBJ else {})
                 )
                 st_GA = time.perf_counter()
                 ga.run(generations, verbose=False)
@@ -613,6 +621,10 @@ if __name__ == "__main__":
                 H_eval = H_eval * hamiltonian_boost
                 H_return = H_return * hamiltonian_boost
                 H_risk = H_risk * hamiltonian_boost 
+
+                idx_1_use, coeff_1_use, idx_2_a_use, idx_2_b_use, coeff_2_use = process_ansatz_values(H_ansatz)
+                coeff_1_use, coeff_2_use = np.array(coeff_1_use), np.array(coeff_2_use)
+
                 # print(hamiltonian_boost)
             df_now = pd.read_csv(f"{dir_path}/{report_name}") if os.path.exists(f"{dir_path}/{report_name}") else None
             if df_now is not None:
@@ -840,10 +852,12 @@ if __name__ == "__main__":
                     if random_init:
                         points_cu = torch.tensor(points, dtype=torch.float64, device=device)
                     elif is_LR_init:
+                        # same convention as mode "Ramp": beta is negated so the ramp follows the ground state
+                        # (Eq. 3 of arXiv:2405.09169 is e^{+i beta H_B}, while rx(2*beta) here is e^{-i beta X})
                         points_cu = torch.tensor(np.zeros_like(points), dtype=torch.float64, device=device)
                         for itt in range(layer_count):
                             points_cu[itt] = delta_gamma * (itt+1) / layer_count
-                            points_cu[layer_count + itt] = delta_beta * (1 - itt/layer_count)
+                            points_cu[layer_count + itt] = -delta_beta * (1 - itt/layer_count)
                     else:
                         points_cu = torch.tensor(np.zeros_like(points), dtype=torch.float64, device=device)
                     # print("init at:", np.round(points_cu.cpu().numpy(), 4).tolist())
@@ -920,7 +934,7 @@ if __name__ == "__main__":
                     optimal_parameters = np.zeros(2 * layer_count)
                     for itt in range(layer_count):
                         optimal_parameters[itt] = delta_gamma * (itt+1) / layer_count
-                        optimal_parameters[layer_count + itt] = delta_beta * (1 - itt/layer_count)
+                        optimal_parameters[layer_count + itt] = -delta_beta * (1 - itt/layer_count)
                     # print("Ramp parameters:", optimal_parameters.tolist())
                     expectation = float(cudaq.observe(kernel_qaoa_use, H_ansatz, optimal_parameters, *ansatz_fixed_param).expectation())
                     expectation_eval = float(cudaq.observe(kernel_qaoa_use, H_eval, optimal_parameters, *ansatz_fixed_param).expectation())
