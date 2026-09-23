@@ -1,0 +1,1 @@
+"""Classical competitors (S13)."""

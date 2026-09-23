@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gsp"
+dynamic = ["version"]
+description = "Constrained ground-state preparation harness (thesis WP2-WP5)"
+requires-python = ">=3.11"
+# Dependencies are pinned by env/requirements.lock (the `gsp` conda env), not here.
+dependencies = []
+
+[project.scripts]
+gsp = "gsp.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "gsp._version.HARNESS_VERSION"}
+
+[tool.setuptools.packages.find]
+include = ["gsp*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: needs the local GPU (CUDA-Q nvidia target); skipped if another process holds it",
+    "slow: long-running; skipped unless --runslow is given",
+]
+filterwarnings = [
+    # the frozen legacy copy (tests/legacy) uses SpinOperator.get_raw_data, deprecated in CUDA-Q 0.15
+    "ignore:raw data access will no longer be supported:DeprecationWarning",
+]

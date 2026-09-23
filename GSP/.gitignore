@@ -1,0 +1,14 @@
+# Code only: docs, plans, reports, configs, results and test fixtures stay local and untracked.
+*
+!*/
+!*.py
+!*.sh
+!.gitignore
+!.gitkeep
+!pyproject.toml
+!env/requirements.lock
+
+/results/
+__pycache__/
+*.egg-info/
+.pytest_cache/
