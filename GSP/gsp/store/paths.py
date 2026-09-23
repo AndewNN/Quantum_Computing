@@ -54,6 +54,17 @@ def sectors_dir(root=None) -> Path:
     return results_root(root) / "sectors"
 
 
+def sector_path(scope_id: str, rule: str, K: int, root=None) -> Path:
+    """`sectors_{draw_id|inst_id}_{rule}_K{K}.npz` (PLAN §3.1): per draw for the violation rule,
+    per instance for the objective-aware rule."""
+    return sectors_dir(root) / f"sectors_{scope_id}_{rule}_K{int(K)}.npz"
+
+
+def sector_jobs_dir(root=None) -> Path:
+    """One JSON per GA job (a draw or an instance and a rule): stats, selection loss, control."""
+    return sectors_dir(root) / "jobs"
+
+
 def runs_dir(root=None) -> Path:
     return results_root(root) / "runs"
 
