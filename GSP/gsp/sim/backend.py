@@ -8,6 +8,12 @@ The update loops of the arms may use `observe` and `sample` only. `get_state` is
 post-update logger, post-run metrics and tests (PLAN §1.6, §3.3).
 
 cudaq is imported lazily: instance freezing and the other CPU-only tools never load it.
+
+Gate fusion (S4, measured on 0.15.1 / RTX 4080, STATUS S4): the `nvidia` fp64 simulator (cusvsim) fuses gates
+up to `CUDAQ_FUSION_MAX_QUBITS` qubits (default 4). For the harness circuits a limit of **1** is the fastest at
+every n = 8 ... 20 (3.7x at n = 20 for A0: 70 ms -> 19 ms per circuit; 1.1-1.4x at n <= 18), and the states agree
+with the unfused ones to <= 1e-15. `set_target` therefore sets it to 1 unless the variable is already set, and
+`runtime_info` records the value in run.json.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ from ..instances.bits import cudaq_to_classical
 
 DEFAULT_TARGET = "nvidia"
 DEFAULT_OPTION = "fp64"
+FUSION_ENV = "CUDAQ_FUSION_MAX_QUBITS"
+DEFAULT_FUSION_MAX_QUBITS = "1"
 
 _state = {"target": None, "option": None}
 
@@ -32,7 +40,9 @@ def _cudaq():
 
 
 def set_target(name: str = DEFAULT_TARGET, option: str | None = DEFAULT_OPTION) -> None:
-    """Select the simulator. Default: `nvidia` with option `fp64` (PLAN §3.3)."""
+    """Select the simulator. Default: `nvidia` with option `fp64` (PLAN §3.3), gate fusion limited to one
+    qubit (module docstring) unless CUDAQ_FUSION_MAX_QUBITS is already set."""
+    os.environ.setdefault(FUSION_ENV, DEFAULT_FUSION_MAX_QUBITS)
     cq = _cudaq()
     if option:
         cq.set_target(name, option=option)
@@ -123,7 +133,7 @@ def runtime_info() -> dict:
     """What run.json records about the simulator (PLAN §3.5)."""
     cq = _cudaq()
     info = {"cudaq_version": cq.__version__, "target": _state["target"],
-            "target_option": _state["option"]}
+            "target_option": _state["option"], "fusion_max_qubits": os.environ.get(FUSION_ENV)}
     info.update(_nvidia_smi())
     return info
 

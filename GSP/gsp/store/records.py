@@ -5,7 +5,7 @@ run.json is **flat** (one level of scalar values), so the registry is a plain ta
   run_id, status (running | done | failed), error (traceback, failed runs only)
   started_at, finished_at (ISO-8601 UTC), wall_s
   host, python, git_sha, git_dirty          (recorded, never hashed)
-  cudaq_version, target, target_option, driver_version, gpu_name   (from gsp.sim.backend)
+  cudaq_version, target, target_option, driver_version, gpu_name, fusion_max_qubits   (from gsp.sim.backend)
   metric_*    final metrics            time_*    timings            diag_*    arm diagnostics
 Heavy arrays never go here: trajectory.npz / counts.json / samples.npz sit next to run.json.
 """
@@ -50,7 +50,7 @@ REQUIRED_CONFIG_KEYS = (
 RECORD_KEYS = (
     "schema_version", "run_id", "status", "error", "started_at", "finished_at", "wall_s",
     "host", "python", "git_sha", "git_dirty",
-    "cudaq_version", "target", "target_option", "driver_version", "gpu_name",
+    "cudaq_version", "target", "target_option", "driver_version", "gpu_name", "fusion_max_qubits",
 )
 NON_CONFIG_PREFIXES = ("metric_", "time_", "diag_")
 
@@ -111,10 +111,10 @@ def new_record(config: dict, runtime: dict | None = None) -> dict:
         "git_sha": sha,
         "git_dirty": dirty,
         "cudaq_version": None, "target": None, "target_option": None,
-        "driver_version": None, "gpu_name": None,
+        "driver_version": None, "gpu_name": None, "fusion_max_qubits": None,
     })
     if runtime:
-        for k in ("cudaq_version", "target", "target_option", "driver_version", "gpu_name"):
+        for k in ("cudaq_version", "target", "target_option", "driver_version", "gpu_name", "fusion_max_qubits"):
             rec[k] = runtime.get(k)
     return rec
 

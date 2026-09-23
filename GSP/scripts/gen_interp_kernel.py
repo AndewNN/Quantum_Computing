@@ -25,7 +25,12 @@ dispatching on the arity (1..{MAXC} controls, n <= {NQ}): each branch is a fixed
 which the kernel language supports.
 
 Opcodes: 0 x, 1 h, 2 s, 3 sdg, 4 t, 5 tdg, 6 cx (control ctl[cs]), 7 rx, 8 ry, 9 rz,
-10 mc-rx, 11 mc-ry (controls ctl[cs .. cs + nc - 1], closed). Angle = coef, or coef * p[pidx] if pidx >= 0.
+10 mc-rx, 11 mc-ry (controls ctl[cs .. cs + nc - 1], closed), 12 crz (control ctl[cs]; S4, the simulation
+form of the cost layer). Angle = coef, or coef * p[pidx] if pidx >= 0.
+
+S4: the arms run the layered kernel (`layered.py`), whose arguments are ~L times shorter; this kernel stays the
+engine of the C1 checks and of any flat gate list. Every list element of the arguments costs ~0.8 us of argument
+conversion per call on 0.15.1 (STATUS S4), about half of this kernel's time on a 4,300-gate list.
 """
 
 import cudaq
@@ -61,6 +66,8 @@ def kernel_program(n: int, op: list[int], tgt: list[int], cs: list[int], nc: lis
             ry(ang, q[tq])
         elif o == 9:
             rz(ang, q[tq])
+        elif o == 12:
+            rz.ctrl(ang, q[ctl[cs[g]]], q[tq])
 '''
 
 

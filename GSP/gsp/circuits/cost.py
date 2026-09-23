@@ -2,11 +2,21 @@
 
 Ported from the completed work's `kernel_qaoa_X` / `kernel_qaoa_Preserved` (Utils/qaoaCUDAQ.py): per
 field rz(2 c gamma) on qubit i, per ZZ term cx(a, b) rz(2 c gamma)_b cx(a, b), in the order of
-`Ising.terms()` (fields by qubit, then pairs lexicographically), zeros dropped, c = alpha * coefficient
-(the Jh boost, applied in the circuit). The constant is a global phase and is not applied.
+`Ising.terms()` (fields by qubit, then pairs lexicographically), zeros dropped, c = alpha * coefficient.
+The arms pass alpha = 1 (S4): the completed runs' circuits carried the un-boosted coefficients (the boost
+scaled only the observable; `ansatz.py` has the evidence). The constant is a global phase and is not applied.
 
 Counts: 2 CNOTs per ZZ term (V18); one arbitrary rotation per term (V20).
 S3 builds it for the timing and the counts; S4 owns the arm conventions (sign, boost) and their tests.
+
+Two forms of the same layer (S4):
+  `cost_gates`      the counted (abstract) circuit, cx-rz-cx per ZZ term: what (ii) / (iii) / T count;
+  `cost_gates_sim`  what the simulator runs: one controlled rz per ZZ term plus one rz per qubit,
+                    exp(-i g c Z_a Z_b) = rz(2 c g)_b crz(-4 c g)_{a -> b}, with the rz's of every term on
+                    qubit b and its field merged into one rz(2 g (h_b + sum_a c_ab))_b. All gates are diagonal,
+                    so they commute and the merge is exact (the unitary is the same up to the rounding of the
+                    summed angle, <= 1e-15 in the tests). 1 + n(n-1)/2 + n gates instead of n + 3 n(n-1)/2,
+                    and cusvsim fuses diagonal gates: the layer runs ~3x faster (STATUS S4).
 """
 
 from __future__ import annotations
@@ -49,6 +59,25 @@ def cost_gates(ct: CostTerms, pidx: int = 0) -> list:
     for a, b, c in zip(ct.idx_2a, ct.idx_2b, ct.coeff_2):
         out += [Gate("cx", (a, b)), Gate("rz", (b,), Angle(2.0 * c, pidx)), Gate("cx", (a, b))]
     return out
+
+
+def cost_gates_sim(ct: CostTerms, pidx: int = 0) -> list:
+    """The simulation form of the layer (module docstring): crz per ZZ term (term order), then rz per qubit
+    (ascending, zeros dropped). Exactly the unitary of `cost_gates(ct, pidx)`."""
+    hz = np.zeros(ct.n)
+    for i, c in zip(ct.idx_1, ct.coeff_1):
+        hz[i] += 2.0 * c
+    for a, b, c in zip(ct.idx_2a, ct.idx_2b, ct.coeff_2):
+        hz[b] += 2.0 * c
+    out = [Gate("crz", (a, b), Angle(-4.0 * c, pidx)) for a, b, c in zip(ct.idx_2a, ct.idx_2b, ct.coeff_2)]
+    out += [Gate("rz", (q,), Angle(float(hz[q]), pidx)) for q in range(ct.n) if hz[q] != 0.0]
+    return out
+
+
+def min_abs_coeff(ct: CostTerms) -> float:
+    """Smallest nonzero |coefficient| of the layer as applied in the circuit (boosted); inf if none."""
+    vals = [abs(c) for c in ct.coeff_1 + ct.coeff_2 if c != 0.0]
+    return float(min(vals)) if vals else float("inf")
 
 
 def diagonal(ct: CostTerms, idx) -> np.ndarray:

@@ -44,6 +44,7 @@ import numpy as np
 
 ROTATIONS = ("rx", "ry", "rz")
 NATIVE_MC = ("mcrx", "mcry")
+SIM_ONLY = ("crz",)              # controlled Rz: only in the simulation form of the cost layer (S4, cost.py)
 CLIFFORD_1Q = ("x", "h", "s", "sdg")
 
 
@@ -76,7 +77,7 @@ class Gate:
             return self
         if self.name in ("s", "sdg", "t", "tdg"):
             return Gate({"s": "sdg", "sdg": "s", "t": "tdg", "tdg": "t"}[self.name], self.qubits)
-        if self.name in ROTATIONS or self.name in NATIVE_MC:
+        if self.name in ROTATIONS or self.name in NATIVE_MC or self.name in SIM_ONLY:
             return Gate(self.name, self.qubits, self.angle.scaled(-1.0))
         raise ValueError(self.name)
 
@@ -227,9 +228,10 @@ def transition_ii(n: int, xmask, ladder, k0: int, kind: str, angle: Angle) -> li
 
 # --- counting helpers -------------------------------------------------------------------------------
 def cnot_count(gates) -> int:
-    n_native = sum(g.name in NATIVE_MC for g in gates)
+    n_native = sum(g.name in NATIVE_MC or g.name in SIM_ONLY for g in gates)
     if n_native:
-        raise ValueError("a native multi-controlled gate has no CNOT count; lower it first")
+        raise ValueError("a native multi-controlled (or simulation-only) gate has no CNOT count; count the "
+                         "abstract circuit instead")
     return sum(g.name == "cx" for g in gates)
 
 

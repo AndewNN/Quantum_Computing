@@ -46,6 +46,8 @@ def gate_matrix(g: Gate, params=None) -> np.ndarray:
         return rot(g.name, g.angle.value(params))
     if g.name in ("mcrx", "mcry"):
         return rot(g.name[2:], g.angle.value(params))
+    if g.name == "crz":
+        return rot("rz", g.angle.value(params))
     raise ValueError(g.name)
 
 
@@ -79,7 +81,7 @@ def apply(gates, psi: np.ndarray, params=None) -> np.ndarray:
     """Apply `gates` (time order) in place to psi of shape (2,)*n + (B,); returns psi."""
     for g in gates:
         M = gate_matrix(g, params)
-        if g.name == "cx":
+        if g.name in ("cx", "crz"):
             apply_controlled(psi, (g.qubits[0],), g.qubits[1], M)
         elif g.name in ("mcrx", "mcry"):
             apply_controlled(psi, g.qubits[:-1], g.qubits[-1], M)

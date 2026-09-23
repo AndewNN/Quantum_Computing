@@ -11,6 +11,13 @@ S3:  gsp mixer counts                 (gate counts (ii)/(iii)/T of every confine
      gsp mixer c1 [--engine numpy|cudaq] [--decomposed-n-max 10]   (C1 operator level, real sectors n <= 12)
      gsp mixer time                   (GPU timing of the A1 circuit; one GPU process)
      gsp mixer report [--no-write]    (reports/mixer_counts.md)
+S4:  gsp arms smoke                   (every §1.2 cell at N = 4: A0 / A1 / A2p / A2c runs, validated; GPU)
+     gsp arms anneal                  (A2 anneal check, both encodings, both ramp signs; GPU)
+     gsp arms repro                   (A1 / A0 reproduction vs the completed runs' AR2; GPU)
+     gsp arms time                    (s / iteration before / after the S4 speedups; GPU, sequential subprocesses)
+     gsp arms report [--no-write]     (reports/arms.md from the tables above and s4_legacy.json)
+     gsp arms run --arm A1 --inst N04e004q1.5 --effort 5 [--K 12 --rule violation --conn ring] [--lam ...]
+     (scripts/s4_legacy_checks.py: the legacy-equivalence numbers, results/tables/s4_legacy.json)
 Later sessions add plan, run, aggregate, report, missing, selfcheck.
 """
 
@@ -19,6 +26,7 @@ from __future__ import annotations
 from . import _threads  # noqa: F401  (pins BLAS/OpenMP threads before numpy loads)
 
 import argparse
+import json
 import sys
 
 
@@ -134,6 +142,51 @@ def _cmd_mixer(args) -> int:
     raise AssertionError(args.action)
 
 
+def _cmd_arms(args) -> int:
+    from .arms import checks
+
+    log = lambda m: print(m, file=sys.stderr, flush=True)   # noqa: E731
+    if args.action == "smoke":
+        df = checks.smoke(args.results, log=log)
+        print(f"{len(df)} runs, {int(df.valid.sum())} valid")
+        return 0 if bool(df.valid.all()) else 1
+    if args.action == "anneal":
+        df = checks.anneal(args.results, log=log)
+        v = checks.anneal_verdict(df)
+        print(v.to_string(index=False))
+        return 0 if bool(v["pass"].all()) else 1
+    if args.action == "repro":
+        df = checks.repro(args.results, log=log)
+        print(df[["arm", "e", "ar_f", "ar2_completed", "delta", "iterations"]].to_string(index=False))
+        return 0
+    if args.action == "time":
+        from .arms import timing
+        timing.run_all(log=log)
+        return 0
+    if args.action == "report":
+        from .arms import report
+        if args.no_write:
+            print(report.markdown(args.results))
+        else:
+            print(f"written to {report.write(args.results)}", file=sys.stderr)
+        return 0
+    if args.action == "run":
+        from .arms.qaoa import A0, A1
+        from .arms.ramp import A2
+        arm = {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined")}[args.arm]()
+        cell = None if args.arm in ("A0", "A2p") else {"connectivity": args.conn, "rule": args.rule, "K": args.K}
+        kw = {"lam": args.lam} if args.arm in ("A0", "A2p") else {}
+        if args.arm in ("A0", "A1"):
+            kw["restart"] = args.restart
+        else:
+            kw["schedule_tag"] = args.schedule
+        r = arm.run(args.inst, cell, args.effort, root=args.results, **kw)
+        print(json.dumps({k: v for k, v in r.record.items() if k.startswith(("run_id", "status", "metric_"))},
+                         indent=1))
+        return 0
+    raise AssertionError(args.action)
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="gsp", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -182,6 +235,21 @@ def main(argv=None) -> int:
     pm.add_argument("--no-builder", action="store_true", help="time: interpreter engine only")
     pm.add_argument("--no-write", action="store_true", help="report: print only")
     pm.set_defaults(func=_cmd_mixer)
+
+    pa = sub.add_parser("arms", help="arms A0 / A1 / A2: smoke run, anneal check, reproduction, timing, report (S4)")
+    pa.add_argument("action", choices=["smoke", "anneal", "repro", "time", "report", "run"])
+    pa.add_argument("--results", default=None)
+    pa.add_argument("--no-write", action="store_true", help="report: print only")
+    pa.add_argument("--arm", choices=["A0", "A1", "A2p", "A2c"], default="A1", help="run: the arm")
+    pa.add_argument("--inst", default=None, help="run: inst_id")
+    pa.add_argument("--effort", type=int, default=5, help="run: depth L (A0/A1) or ramp depth p (A2)")
+    pa.add_argument("--K", type=int, default=12)
+    pa.add_argument("--rule", default="violation")
+    pa.add_argument("--conn", default="ring")
+    pa.add_argument("--lam", type=float, default=None, help="run: lambda of a penalty arm")
+    pa.add_argument("--restart", type=int, default=0)
+    pa.add_argument("--schedule", default="primary")
+    pa.set_defaults(func=_cmd_arms)
 
     px = sub.add_parser("index", help="rebuild the run registry from every run.json")
     px.add_argument("--results", default=None)
