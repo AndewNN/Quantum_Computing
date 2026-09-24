@@ -426,6 +426,66 @@ def pilot_queue_specs(root=None) -> tuple[list[dict], dict]:
     return specs, meta
 
 
+# --- S9c (PLAN §5 S9c, §4.2): the queues of the boosted default ------------------------------------------------------
+# The boosted circuit is the default for A0 / A1 / A3 (O-2); its configs hash with circuit_boosted = True (absent =
+# the legacy un-boosted convention, which every stored record without the key is). So the runs below, queued with the
+# flag, carry exactly the run_ids of the boosted default: untagged runs are the sweep's own computations.
+S9C_QUEUE_NAMES = {4: "s9c_q4_pilot_boosted", 5: "s9c_q5_retiming", 6: "s9c_q6_o11"}
+
+
+def boosted_pilot_specs(root=None) -> tuple[list[dict], dict]:
+    """Queue 4: the lambda pilot of PLAN §1.4 (queue 2's specs) on the boosted circuit; lambda*(N) comes from it."""
+    specs, meta = pilot_queue_specs(root)
+    out = [dict(s, kw=dict(s["kw"], circuit_boosted=True), run_id=None,
+                label=f"pilot-boosted A0 N{s['N']} lam{s['lam']:g} L7") for s in specs]
+    meta = dict(meta, circuit_boosted=True, equivalent_command="gsp plan --pilot, with circuit_boosted (S9c)")
+    return resolve_strict(out, root), meta
+
+
+def retiming_specs(root=None) -> list[dict]:
+    """Queue 5: queue 1's A0 / A1 depth-9 timing runs on the boosted circuit (S9c: confirm the time models)."""
+    it = _instances(root)
+    f = lambda N: first_draws(N, 1, 1.5, False, it)[0]                      # noqa: E731
+    lam = TIMING_LAM
+    S = [spec("A0", f(N), 9, kw={"restart": 0, "lam": lam, "circuit_boosted": True}, lam=lam, tag="timing",
+              label=f"A0 N{N} L9 boosted") for N in (5, 10)]
+    S += [spec("A1", f(N), 9, cell=dict(BASELINE), axis="baseline",
+               kw={"restart": 0, "ring_order": "lex", "circuit_boosted": True}, tag="timing",
+               label=f"A1 ring N{N} K12 L9 boosted") for N in (5, 7)]
+    return S
+
+
+O11_S9C_VARIANTS = O11_VARIANTS + (("d", {"stencil": "central"}),)
+
+
+def o11_round_specs(root=None, o11_draws: int = 5) -> list[dict]:
+    """Queue 6, the O-11 round of §4.2: {boosted} x {(a) default, (b) psd_project, (c) tikhonov 1e-4, (d) central
+    stencil}, plus the old convention's (d) (queue 3 ran the old (a)-(c)); A3 at N 7, L 5, lam 0.005, q 1.5, the first
+    5 accepted draws, each at the Ramp init and the two 1e-9 rad jitters (seeds 0, 1). The boosted default without
+    jitter is the sweep config of the boosted default (untagged); every other run is tagged "O-11"."""
+    it = _instances(root)
+    S = []
+    for iid in first_draws(7, o11_draws, 1.5, False, it):
+        for boosted in (True, False):
+            for var, extra in O11_S9C_VARIANTS:
+                if not boosted and var != "d":
+                    continue
+                for js in O11_JITTER_SEEDS:
+                    kw = {"lam": 0.005, **extra}
+                    if boosted:
+                        kw["circuit_boosted"] = True
+                    if js is not None:
+                        kw.update(theta0_jitter=O11_JITTER, theta0_jitter_seed=js)
+                    sweep_cfg = boosted and not extra and js is None
+                    if not sweep_cfg:
+                        kw["evidence"] = "O-11"
+                    conv = "boosted" if boosted else "old"
+                    S.append(spec("A3", iid, 5, kw=kw, lam=0.005, tag="evidence:O-11",
+                                  label=f"O-11 A3 {conv} ({var}) jitter {'none' if js is None else js}"
+                                        + (" (sweep config)" if sweep_cfg else "")))
+    return S
+
+
 # --- F. estimates ----------------------------------------------------------------------------------------------------
 # Measured rates (RTX 4080, fp64, fusion 1), with their sources. Seconds.
 RATES = {

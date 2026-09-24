@@ -9,6 +9,8 @@ configs/matched_depths.yaml, reports/matched_depths.md, results/tables/s9a_calib
                three queues (keyed by `calibration.bench_key`), for the estimates where S4 / S7 / S8 measured no rate;
                plus the extreme-effort circuit checks (A0 at L0(5, 9) and L0(7, 9); A4 / A6 at k = 10 on N = 4: one
                observe each, observe energy == state energy).
+  queues-s9c   (CPU) the S9c queues 4 (the lambda pilot on the boosted circuit), 5 (boosted re-timing), 6 (the O-11
+               round) and results/queues/s9c.chain for `scripts/chain.sh` (--skip-o11: queues 4 and 5 only).
   queues       (CPU) queue 1 (timing), queue 2 (the lambda pilot = `gsp plan --pilot`), queue 3 (evidence O-2 / O-11)
                with run_ids, est_s per run, sidecars; run counts and GPU-hours per queue; queue 3 is trimmed first if
                the total exceeds --budget-h (12).
@@ -132,6 +134,38 @@ def cmd_queues(args):
         for r in rows:
             print(f"  q{r['queue']} {r['arm']:<4} {r['run_id']} {r['inst_id']} eff={r['effort']:<3} "
                   f"est {r['est_s']} s  {r['label']}  [{r['source']}]")
+
+
+# --- S9c queues -------------------------------------------------------------------------------------------------------
+def cmd_queues_s9c(args):
+    """Queues 4 (boosted lambda pilot), 5 (boosted re-timing), 6 (O-11 round: boosted x 4 variants + the old
+    convention's central stencil) and the chain file results/queues/s9c.chain that `scripts/chain.sh` runs."""
+    from gsp.runner import calibration as C
+    from gsp.runner.queue import run_state
+    bench = _bench()
+    q4, meta4 = C.boosted_pilot_specs()
+    qs = {4: (q4, dict(meta4, queue="lambda pilot, boosted circuit (S9c priority 1)")),
+          5: (C.resolve_strict(C.retiming_specs()), {"queue": "boosted re-timing (S9c priority 2)"})}
+    if not args.skip_o11:
+        qs[6] = (C.resolve_strict(C.o11_round_specs()), {"queue": "O-11 round (S9c priority 3)"})
+    qdir = GSP / "results" / "queues"
+    summary, rows = {}, []
+    for k, (q, meta) in qs.items():
+        est = C.estimate_specs(q, bench)
+        path = qdir / f"{C.S9C_QUEUE_NAMES[k]}.jsonl"
+        C.write_queue(q, path, dict(meta, session="S9c", estimate=est))
+        done = sum(1 for s in q if run_state(s["arm"], s["run_id"])[0] == "done")
+        summary[str(k)] = {"file": str(path.relative_to(GSP)), "runs": len(q), "already_done": done,
+                           "est_h": round(est["est_h"], 3), "per_arm": est["per_arm"], "unknown": est["unknown"]}
+        rows += [{"queue": k, "arm": s["arm"], "label": s.get("label"), "run_id": s["run_id"], "inst_id": s["inst_id"],
+                  "effort": s["effort"], "kw": s["kw"], "est_s": s.get("est_s")} for s in q]
+        print(f"queue {k}: {summary[str(k)]['file']}: {len(q)} runs ({done} already done), est {est['est_h']:.2f} GPU-h"
+              + (f"; NO RATE: {est['unknown']}" if est["unknown"] else ""))
+    chain = qdir / "s9c.chain"
+    chain.write_text("# S9c chain (scripts/chain.sh): one queue per line, relative to the results root\n"
+                     + "".join(f"queues/{C.S9C_QUEUE_NAMES[k]}.jsonl\n" for k in sorted(qs)))
+    save_section("s9c_queues", {"summary": summary, "runs": rows, "chain": str(chain.relative_to(GSP))})
+    print(f"chain file {chain}")
 
 
 # --- bench (GPU) ------------------------------------------------------------------------------------------------------
@@ -360,14 +394,15 @@ def cmd_smoke_check(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["depths", "bench", "queues", "smoke-setup", "smoke-check"])
+    ap.add_argument("cmd", choices=["depths", "bench", "queues", "queues-s9c", "smoke-setup", "smoke-check"])
     ap.add_argument("--budget-h", type=float, default=BUDGET_H, help="queues: trim queue 3 above this total")
     ap.add_argument("--list", action="store_true", help="queues: one line per run")
+    ap.add_argument("--skip-o11", action="store_true", help="queues-s9c: queues 4 and 5 only")
     ap.add_argument("--root", default=None, help="smoke-setup / smoke-check: the scratch results root")
     args = ap.parse_args(argv)
     if args.cmd.startswith("smoke") and not args.root:
         ap.error("--root is required")
-    fn = {"depths": cmd_depths, "bench": cmd_bench, "queues": cmd_queues, "smoke-setup": cmd_smoke_setup,
+    fn = {"depths": cmd_depths, "bench": cmd_bench, "queues": cmd_queues, "queues-s9c": cmd_queues_s9c, "smoke-setup": cmd_smoke_setup,
           "smoke-check": cmd_smoke_check}[args.cmd]
     return fn(args) or 0
 

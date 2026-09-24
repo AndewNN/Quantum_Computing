@@ -27,6 +27,8 @@ cumulative sum of these, so counts.json carries `charge_model: per_unit` (`metri
 
 Config extras (hashed): init "ramp", metric ("M1" A3 | "diag" A3d), grad "fd_forward", dtau, n_steps, tikhonov.
 S9a, O-11 evidence only (written only when set): psd_project, theta0_jitter / theta0_jitter_seed, evidence.
+S9c (written only when set): circuit_boosted (O-2: the boosted circuit, theta_0 = the same physical state), stencil
+"central" (O-11 evidence).
 A3 is deterministic (R = 1): `restart` must be 0; `seed` = the draw's restart seed r = 0 (used only by the post-run
 sample). Effort = depth L.
 """
@@ -42,7 +44,7 @@ from ..circuits.ansatz import Ansatz
 from ..compile import tcount
 from ..compile.transpile import cost_counts
 from ..metrics.state import METRIC_KEYS, StateLogger, metric_context
-from ..train.mclachlan import McLachlanConfig, McLachlanResult, ramp_init, run_mclachlan
+from ..train.mclachlan import STENCILS, McLachlanConfig, McLachlanResult, ramp_init, run_mclachlan
 from .base import Arm, Outcome, RunConfig, draw_of, evidence_tag, make_extras, restart_seed
 from .qaoa import penalty_arm_ansatz
 
@@ -139,8 +141,9 @@ def _add(a: dict, b: dict, k: int = 1) -> dict:
     return {key: int(a.get(key, 0)) + k * int(b[key]) for key in COUNT_KEYS}
 
 
-def a3_counts(A: Ansatz, metric: str) -> dict:
-    """counts.json of an A3 / A3d run (module doc): per circuit class, per step, the one-off first-step energy."""
+def a3_counts(A: Ansatz, metric: str, stencil: str = "forward") -> dict:
+    """counts.json of an A3 / A3d run (module doc): per circuit class, per step, the one-off first-step energy.
+    stencil "central" (S9c, O-11 evidence): 4 overlap circuits per pair i < j on 2 max(layer) layers, no F_i."""
     ts = tcount.t_syn()
     C = cost_counts(A.ct, ts)
     X = {"t": tcount.x_mixer_t(A.n, ts), "tdepth": tcount.x_mixer_tdepth(ts)}
@@ -155,13 +158,15 @@ def a3_counts(A: Ansatz, metric: str) -> dict:
     n_ovl = 0
     if metric == "M1":
         lay = [ov.layer_of(k, L) for k in range(p)]
+        per_pair = 4 if stencil == "central" else 1
         for i in range(p):
-            ovl = _add(ovl, _circ(C, X, 2 * (lay[i] + 1), 2 * (lay[i] + 1)))
-            n_ovl += 1
+            if stencil != "central":
+                ovl = _add(ovl, _circ(C, X, 2 * (lay[i] + 1), 2 * (lay[i] + 1)))
+                n_ovl += 1
             for j in range(i + 1, p):
                 m = max(lay[i], lay[j]) + 1
-                ovl = _add(ovl, _circ(C, X, 2 * m, 2 * m))
-                n_ovl += 1
+                ovl = _add(ovl, _circ(C, X, 2 * m, 2 * m), per_pair)
+                n_ovl += per_pair
     classes = {"energy": {"circuits": p + 1, **{k: (p + 1) * v for k, v in energy.items()}},
                "variance": {"circuits": p, **var},
                "overlap": {"circuits": n_ovl, **ovl}}
@@ -170,6 +175,7 @@ def a3_counts(A: Ansatz, metric: str) -> dict:
         per_unit = _add(per_unit, c)
     layer = _circ(C, X, 1, 1)
     return {"effort_unit": "step", "charge_model": "per_unit", "metric": metric,
+            **({"stencil": stencil} if stencil != "forward" else {}),
             "circuits_per_unit": int(sum(c["circuits"] for c in classes.values())),
             "per_unit": per_unit, "per_circuit": energy, "layer": layer, "start": dict(zero),
             "first_unit_extra": {"circuits": 1, **energy}, "classes": classes,
@@ -230,15 +236,20 @@ class A3(Arm):
 
     def config(self, inst, cell, effort, seed, *, lam=None, restart: int = 0, n_steps: int | None = None,
                tikhonov: float | None = None, psd_project: bool = False, theta0_jitter: float | None = None,
-               theta0_jitter_seed: int | None = None, evidence: str | None = None, adhoc: bool = False,
-               root=None) -> RunConfig:
+               theta0_jitter_seed: int | None = None, circuit_boosted: bool = False, stencil: str = "forward",
+               evidence: str | None = None, adhoc: bool = False, root=None) -> RunConfig:
         """`n_steps` (default 300) is only for smoke / timing runs (S7, S9); the planner never passes it.
         S9a, O-11 evidence only (the planner never passes them; the defaults hash exactly as before):
           tikhonov            overrides 1e-6 (the value is always hashed);
           psd_project         True: M projected onto its PSD cone before the Tikhonov solve (hashed only when True);
           theta0_jitter(_seed) theta_0 = Ramp init + default_rng(seed).normal(scale=jitter, size=p), S7's ensemble
                               (both or neither; hashed only when set);
-          evidence            the label of an informational run (e.g. "O-11"); no rule reads it."""
+          evidence            the label of an informational run (e.g. "O-11"); no rule reads it.
+        S9c (hashed only when not the default, so every earlier run_id is unchanged):
+          circuit_boosted     True: the circuit carries alpha x the coefficients (O-2, §1.5; hashed as True, the key's
+                              absence = the legacy un-boosted circuit). theta_0 is the same physical state: the Ramp
+                              init's gammas divided by alpha (`theta0`);
+          stencil             "central": M1's off-diagonal from the 4-point stencil (O-11 evidence)."""
         if int(restart) != 0:
             raise ValueError(f"{self.name} is deterministic (R = 1): restart must be 0")
         if lam is None:
@@ -247,6 +258,10 @@ class A3(Arm):
             raise ValueError("theta0_jitter and theta0_jitter_seed go together")
         if theta0_jitter is not None and not float(theta0_jitter) > 0:
             raise ValueError("theta0_jitter must be > 0")
+        if stencil not in STENCILS:
+            raise ValueError(f"stencil must be one of {STENCILS}")
+        if stencil != "forward" and self.metric != "M1":
+            raise ValueError(f"{self.name}: the stencil applies to the M1 metric only")
         seed = restart_seed(draw_of(inst.inst_id), 0, root) if seed is None else int(seed)
         settings = dict(A3_DEFAULTS)
         if n_steps is not None:
@@ -260,25 +275,32 @@ class A3(Arm):
                          extras=make_extras(init="ramp", metric=self.metric, grad="fd_forward",
                                             inst_adhoc=True if adhoc else None,
                                             psd_project=True if psd_project else None,
+                                            circuit_boosted=True if circuit_boosted else None,
+                                            stencil=None if stencil == "forward" else str(stencil),
                                             theta0_jitter=None if theta0_jitter is None else float(theta0_jitter),
                                             theta0_jitter_seed=(None if theta0_jitter_seed is None
                                                                 else int(theta0_jitter_seed)),
                                             evidence=evidence_tag(evidence), **settings))
 
     def ansatz(self, cfg, inst, root=None):
-        return penalty_arm_ansatz(inst, cfg.lam, cfg.effort), None
+        return penalty_arm_ansatz(inst, cfg.lam, cfg.effort, bool(cfg.extra("circuit_boosted", False))), None
 
     def mc_config(self, cfg: RunConfig) -> McLachlanConfig:
         if cfg.extra("init") != "ramp" or cfg.extra("grad") != "fd_forward":
             raise ValueError(f"unsupported A3 config: init {cfg.extra('init')}, grad {cfg.extra('grad')}")
         return McLachlanConfig(metric=cfg.extra("metric"), dtau=float(cfg.extra("dtau")),
                                n_steps=int(cfg.extra("n_steps")), tikhonov=float(cfg.extra("tikhonov")),
-                               psd=bool(cfg.extra("psd_project", False)))
+                               psd=bool(cfg.extra("psd_project", False)),
+                               stencil=str(cfg.extra("stencil", "forward")))
 
     @staticmethod
-    def theta0(cfg: RunConfig, L: int) -> np.ndarray:
-        """The Ramp init, plus the hashed theta_0 jitter of an O-11 evidence run (S7's ensemble recipe)."""
+    def theta0(cfg: RunConfig, L: int, alpha: float = 1.0) -> np.ndarray:
+        """The Ramp init, plus the hashed theta_0 jitter of an O-11 evidence run (S7's ensemble recipe). On the boosted
+        circuit the gammas are divided by alpha (the same physical start: the flow is covariant under gamma -> gamma /
+        alpha, §1.5); the jitter is added after, in the circuit's own units."""
         x0 = ramp_init(int(L))
+        if cfg.extra("circuit_boosted", False):
+            x0[:int(L)] = x0[:int(L)] / float(alpha)
         if cfg.extra("theta0_jitter") is not None:
             rng = np.random.default_rng(int(cfg.extra("theta0_jitter_seed")))
             x0 = x0 + rng.normal(scale=float(cfg.extra("theta0_jitter")), size=x0.size)
@@ -289,9 +311,9 @@ class A3(Arm):
         A, _ = self.ansatz(cfg, inst, root)
         mc = self.mc_config(cfg)
         ctx = metric_context(inst, rulers, cfg.lam)
-        counts = a3_counts(A, mc.metric)
+        counts = a3_counts(A, mc.metric, mc.stencil)
         setup_s = time.perf_counter() - t0
-        res, rows, final_psi, eng = run_a3(A, mc, ctx=ctx, x0=self.theta0(cfg, A.L), logger=logger)
+        res, rows, final_psi, eng = run_a3(A, mc, ctx=ctx, x0=self.theta0(cfg, A.L, A.alpha), logger=logger)
         t1 = time.perf_counter()
         T = res.n_steps
         if rows is not None:

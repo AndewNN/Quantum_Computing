@@ -292,3 +292,51 @@ def test_launcher_guards(tmp_path):
     assert _run_launcher(env).returncode == 3                                     # nvidia-smi fails
     assert not _calls(tmp_path)
     assert "guard" in (res / "logs" / "s9_calibration.log").read_text()
+
+
+# --- S9c: the boosted-default queues and the chain launcher -----------------------------------------------------------
+@needs_store
+def test_s9c_queues():
+    q2, _ = C.pilot_queue_specs()
+    q4, meta = C.boosted_pilot_specs()
+    assert len(q4) == len(q2) == 275 and meta["circuit_boosted"] is True
+    assert all(s["arm"] == "A0" and s["kw"]["circuit_boosted"] is True and "evidence" not in s["kw"] for s in q4)
+    assert [(s["inst_id"], s["lam"], s["effort"]) for s in q4] == [(s["inst_id"], s["lam"], s["effort"]) for s in q2]
+    assert not {s["run_id"] for s in q4} & {s["run_id"] for s in q2}
+    # the O-2 evidence runs of queue 3 are the same computation but tagged, so they are not reused
+    q3 = C.resolve_strict(C.evidence_specs())
+    assert not {s["run_id"] for s in q4} & {s["run_id"] for s in q3}
+    q5 = C.resolve_strict(C.retiming_specs())
+    assert [(s["arm"], s["N"], s["effort"]) for s in q5] == [("A0", 5, 9), ("A0", 10, 9), ("A1", 5, 9), ("A1", 7, 9)]
+    assert all(s["kw"]["circuit_boosted"] is True and "evidence" not in s["kw"] for s in q5)
+    q6 = C.resolve_strict(C.o11_round_specs())
+    assert len(q6) == 75 and len({s["run_id"] for s in q6}) == 75
+    plain = [s for s in q6 if "evidence" not in s["kw"]]
+    assert len(plain) == 5 and all(s["kw"] == {"lam": 0.005, "circuit_boosted": True} for s in plain)
+    old = [s for s in q6 if not s["kw"].get("circuit_boosted")]
+    assert len(old) == 15 and all(s["kw"]["stencil"] == "central" for s in old)
+    assert not {s["run_id"] for s in q6} & {s["run_id"] for s in q3}
+    assert {s["inst_id"] for s in q6} == set(C.first_draws(7, 5))
+
+
+def test_chain_launcher(tmp_path):
+    env, res = _launcher_env(tmp_path)
+    (res / "queues").mkdir(parents=True)
+    for q in ("s9_q1_timing", "s9_q2_pilot", "s9_q3_evidence", "c1", "c2"):
+        (res / "queues" / f"{q}.jsonl").write_text("")
+    chain = tmp_path / "x.chain"
+    chain.write_text("# comment\nqueues/c1.jsonl\n\nqueues/missing.jsonl\nqueues/c2.jsonl  # trailing\n")
+    r = subprocess.run(["bash", str(SCRIPTS / "chain.sh"), str(chain)], env=dict(env, FAKE_RC_c1="1"),
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+    runs = [Path(c.split("--queue ")[1].split()[0]).stem for c in _calls(tmp_path) if " run --queue " in c]
+    # the S9a resume ignores an inherited S9_QUEUES; a queue with failed runs does not stop the chain
+    assert runs == ["s9_q1_timing", "s9_q2_pilot", "s9_q3_evidence", "c1", "c2"]
+    log = (res / "logs" / "chain.log").read_text()
+    assert "skip: no such queue file" in log and "done: 3 chain queues attempted" in log
+    # a guard refusal is retried, then the queue is skipped
+    (tmp_path / "fake.log").unlink()
+    r = subprocess.run(["bash", str(SCRIPTS / "chain.sh"), str(chain)],
+                       env=dict(env, FAKE_RC_c2="3", CHAIN_RETRY_S="0", CHAIN_RETRIES="2"), timeout=120)
+    runs = [Path(c.split("--queue ")[1].split()[0]).stem for c in _calls(tmp_path) if " run --queue " in c]
+    assert r.returncode == 0 and runs.count("c2") == 3

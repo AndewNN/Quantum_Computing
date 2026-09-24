@@ -20,7 +20,8 @@ Circuits per step: M1 p(p+1)/2 + p + (p + 1); diag p + (p + 1). The first step a
 Settings (verbatim, `McLachlanConfig` defaults): dtau 0.1, 300 steps, FD shift 1e-4 (forward), Tikhonov 1e-6,
 kappa 0.01, cap angle 0.02 rad, f_tol 1e-4, patience 3. `psd` (S9a, O-11 evidence only, default off): M is replaced
 by its projection onto the PSD cone (negative eigenvalues clipped at 0) before the Tikhonov solve; the spectrum
-diagnostics stay those of the estimate, and psd_clip_sum / psd_clip_n record what was clipped.
+diagnostics stay those of the estimate, and psd_clip_sum / psd_clip_n record what was clipped. `stencil` (S9c, O-11
+evidence only, default "forward"): "central" builds M1's off-diagonal from the 4-point stencil (`metric_m1`).
 
 Diagnostics per step (PLAN §1.6; the arm adds V_tau from the logger's state, never used by the update):
 cond(M) and the singular values of the unregularized M, its numerical rank (numpy's default tolerance) and the
@@ -41,6 +42,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 METRICS = ("M1", "diag", "exact")
+STENCILS = ("forward", "central")
 
 
 @dataclass(frozen=True)
@@ -55,10 +57,13 @@ class McLachlanConfig:
     f_tol: float = 1e-4
     patience: int = 3
     psd: bool = False              # S9a (O-11 evidence only): project M onto its PSD cone before the Tikhonov solve
+    stencil: str = "forward"       # S9c (O-11 evidence only): "central" = the 4-point off-diagonal stencil of M1
 
     def __post_init__(self):
         if self.metric not in METRICS:
             raise ValueError(f"metric must be one of {METRICS}")
+        if self.stencil not in STENCILS:
+            raise ValueError(f"stencil must be one of {STENCILS}")
 
 
 def ramp_init(L: int, delta_gamma: float = 3.0, delta_beta: float = 1.5) -> np.ndarray:
@@ -76,12 +81,28 @@ def kappa_delta(diag: np.ndarray, gen_scale: np.ndarray, kappa: float, cap_angle
     return np.minimum(kappa / np.sqrt(np.maximum(diag, 1e-300)), 0.5 * cap_angle / gen_scale)
 
 
-def metric_m1(fid, params: np.ndarray, delta: np.ndarray, diag: np.ndarray, L: int) -> tuple:
+def metric_m1(fid, params: np.ndarray, delta: np.ndarray, diag: np.ndarray, L: int,
+              stencil: str = "forward") -> tuple:
     """M1 forward stencil (driver `build_A_fidelity`, FID_STENCIL "forward", exact branch: no PSD projection).
-    fid(pa, pb, m) = |<psi(pa)|psi(pb)>|^2 on the first m layers. Returns (M, number of overlap circuits)."""
+    fid(pa, pb, m) = |<psi(pa)|psi(pb)>|^2 on the first m layers. Returns (M, number of overlap circuits).
+    stencil "central" (S9c, O-11 evidence; the driver's FID_STENCIL "central" with the kappa diagonal given):
+    M_ij = -(F(+i+j) - F(+i-j) - F(-i+j) + F(-i-j)) / (8 delta_i delta_j), 2p(p-1) overlap circuits, M_ii = d_i."""
     p = params.size
     E = np.eye(p) * delta[:, None]
     lay = np.array([k if k < L else k - L for k in range(p)])
+    if stencil == "central":
+        A = np.zeros((p, p))
+        n_fid = 0
+        for i in range(p):
+            for j in range(i + 1, p):
+                m = int(max(lay[i], lay[j])) + 1
+                F = [fid(params, params + (si * E[i] + sj * E[j]), m) for si, sj in ((1, 1), (1, -1), (-1, 1), (-1, -1))]
+                n_fid += 4
+                A[i, j] = A[j, i] = -(F[0] - F[1] - F[2] + F[3]) / (8 * delta[i] * delta[j])
+        A[np.diag_indices(p)] = diag
+        return A, n_fid
+    if stencil != "forward":
+        raise ValueError(f"stencil must be one of {STENCILS}")
     F_i = np.array([fid(params, params + E[i], int(lay[i]) + 1) for i in range(p)])
     A = np.zeros((p, p))
     n_fid = p
@@ -202,7 +223,7 @@ def run_mclachlan(engine, x0, cfg: McLachlanConfig = McLachlanConfig(), logger=N
             n_var = p
             if cfg.metric == "M1":
                 delta = kappa_delta(d, gen_scale, cfg.kappa, cfg.cap_angle)
-                A, n_fid = metric_m1(engine.fidelity, x, delta, d, L)
+                A, n_fid = metric_m1(engine.fidelity, x, delta, d, L, cfg.stencil)
             else:
                 delta = nanp.copy()
                 A = np.diag(d)

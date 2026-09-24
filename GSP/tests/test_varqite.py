@@ -115,6 +115,29 @@ def test_m1_diag_is_the_variance_and_bias_is_linear_in_kappa(ex4):
     assert errs[0] < 0.02 and 6 < errs[0] / errs[1] < 14
 
 
+def test_m1_central_stencil_is_second_order(ex4):
+    """S9c (O-11 evidence): the central 4-point stencil needs 2p(p-1) overlaps, no F_i; its off-diagonal bias is
+    O(delta^2), so it beats the forward stencil and shrinks ~100x per decade of kappa (the legacy driver's formula)."""
+    A, eng = ex4
+    x = example_x0(4) + 0.3
+    M = eng.exact_metric(x)
+    d = eng.var_diag(x)
+    errs = []
+    for kap in (1e-2, 1e-3):
+        delta = kappa_delta(d, eng.gen_scale, kap, 2 * kap)
+        Mc, n_fid = metric_m1(eng.fidelity, x, delta, d, 4, "central")
+        Mf, _ = metric_m1(eng.fidelity, x, delta, d, 4)
+        assert n_fid == 2 * 8 * 7
+        assert np.allclose(Mc, Mc.T, atol=0) and np.array_equal(np.diag(Mc), d)
+        errs.append(np.linalg.norm(Mc - M) / np.linalg.norm(M))
+        assert errs[-1] < 0.1 * np.linalg.norm(Mf - M) / np.linalg.norm(M)
+    assert errs[1] < errs[0] / 30 or errs[1] < 1e-9
+    with pytest.raises(ValueError):
+        metric_m1(eng.fidelity, x, delta, d, 4, "backward")
+    with pytest.raises(ValueError):
+        McLachlanConfig(stencil="backward")
+
+
 def test_c1_forward_difference(ex4):
     A, eng = ex4
     x = example_x0(4) + 0.3
@@ -289,6 +312,41 @@ def test_a3_configs_registered():
         ("M1", 0.1, 300, 1e-6, 1e-4, 0.01, 0.02, 1e-4)
 
 
+@pytest.mark.skipif(not inst_path("N07e000q1.5").exists(), reason="frozen instances absent")
+def test_a3_s9c_flags():
+    """S9c: circuit_boosted / stencil hash only when set (every earlier run_id is unchanged: the O-11 sweep-config run
+    of S9a queue 3 keeps its id), reach the ansatz / loop / counts, and theta_0 is the same physical state."""
+    from gsp.arms.base import make_arm
+    from gsp.arms.varqite import a3_counts
+    from gsp.instances.instance import load_instance
+    inst = load_instance("N07e000q1.5")
+    a3 = make_arm("A3")
+    c = a3.config(inst, None, 5, None, lam=0.005)
+    assert c.run_id == "9ee24c2aaa06283d"                      # S9a queue 3, "O-11 A3 (a) jitter none (sweep config)"
+    assert c.run_id == a3.config(inst, None, 5, None, lam=0.005, circuit_boosted=False, stencil="forward").run_id
+    b = a3.config(inst, None, 5, None, lam=0.005, circuit_boosted=True)
+    cs = a3.config(inst, None, 5, None, lam=0.005, stencil="central", evidence="O-11")
+    assert len({c.run_id, b.run_id, cs.run_id}) == 3
+    assert b.extra("circuit_boosted") is True and c.extra("circuit_boosted") is None
+    assert a3.mc_config(cs).stencil == "central" and a3.mc_config(c).stencil == "forward"
+    with pytest.raises(ValueError):
+        a3.config(inst, None, 5, None, lam=0.005, stencil="backward")
+    with pytest.raises(ValueError):
+        make_arm("A3d").config(inst, None, 5, None, lam=0.005, stencil="central")
+    Ab, _ = a3.ansatz(b, inst)
+    Au, _ = a3.ansatz(c, inst)
+    assert Ab.meta["circuit_boosted"] and not Au.meta["circuit_boosted"]
+    np.testing.assert_allclose(np.array(Ab.ct.coeff_2), Ab.alpha * np.array(Au.ct.coeff_2), rtol=1e-12)
+    x_u, x_b = a3.theta0(c, 5, Au.alpha), a3.theta0(b, 5, Ab.alpha)
+    np.testing.assert_array_equal(x_u, ramp_init(5))
+    np.testing.assert_allclose(x_b[:5] * Ab.alpha, x_u[:5], rtol=1e-15)
+    np.testing.assert_array_equal(x_b[5:], x_u[5:])
+    p = 10
+    cc = a3_counts(Au, "M1", "central")
+    assert cc["classes"]["overlap"]["circuits"] == 2 * p * (p - 1) and cc["stencil"] == "central"
+    assert cc["circuits_per_unit"] == 2 * p * (p - 1) + 2 * p + 1 and "stencil" not in a3_counts(Au, "M1")
+
+
 def test_d1_spec_takes_only_the_sweep_a3():
     from gsp.stats.d1 import d1_spec
     assert d1_spec({4: 0.005})["A3"] == {"_lam": {4: 0.005}, "metric": "M1", "n_steps": 300}
@@ -301,3 +359,28 @@ def test_frozen_driver_copy_equals_source():
     body = DRIVER_COPY.read_text()
     for a, b in ((66, 88), (90, 102), (105, 147), (150, 479)):
         assert "\n".join(src[a - 1:b]) in body
+
+
+@pytest.mark.skipif(not inst_path("N04e004q1.5").exists(), reason="frozen instances absent")
+def test_a3_boosted_circuit_is_the_same_flow():
+    """S9c (O-2, §1.5): on the boosted circuit, from theta_0 = the Ramp init with gamma / alpha, the McLachlan flow is
+    the same (covariant under gamma -> gamma / alpha): with the exact M and C and a negligible Tikhonov, E agrees to
+    rounding until the loop's chaos (O-11) amplifies it (numpy engine, n = 8, L = 2; measured 1e-9 over 3 steps, 0.16
+    by step 4). M1's estimators are not covariant: the FD shift 1e-4 and Tikhonov are fixed in parameter units, so on
+    the boosted circuit the gamma FD step is alpha x larger physically and Tikhonov no longer dominates the gamma block
+    (the O-11 evidence measures what that does)."""
+    from gsp.arms.base import make_arm
+    from gsp.instances.instance import load_instance
+    inst = load_instance("N04e004q1.5")
+    a3 = make_arm("A3")
+    out = {}
+    for boosted in (False, True):
+        cfg = a3.config(inst, None, 2, None, lam=0.005, circuit_boosted=boosted, n_steps=3)
+        A, _ = a3.ansatz(cfg, inst)
+        mc = McLachlanConfig(metric="exact", n_steps=3, f_tol=-1.0, tikhonov=1e-12)
+        res = run_mclachlan(NumpyEngine(A), a3.theta0(cfg, 2, A.alpha), mc)
+        scale = np.r_[np.full(2, A.alpha if boosted else 1.0), np.ones(2)]
+        out[boosted] = (res.E_loop, res.params_hist * scale)
+    assert out[True][0][0] == pytest.approx(out[False][0][0], abs=1e-12)
+    np.testing.assert_allclose(out[True][0], out[False][0], rtol=0, atol=1e-7)
+    np.testing.assert_allclose(out[True][1], out[False][1], rtol=1e-5, atol=1e-8)
