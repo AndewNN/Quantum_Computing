@@ -87,3 +87,23 @@ def tables_dir(root=None) -> Path:
 
 def figures_dir(root=None) -> Path:
     return results_root(root) / "figures"
+
+
+def queues_dir(root=None) -> Path:
+    """Queue files written by `gsp plan` (one run spec per line, JSONL) and their `.plan.json` sidecars (S6)."""
+    return results_root(root) / "queues"
+
+
+def logs_dir(root=None) -> Path:
+    """Queue logs, progress (heartbeat) files, the queue lock, and per-run logs under `runs/{arm}/` (S6)."""
+    return results_root(root) / "logs"
+
+
+def run_log_path(arm: str, run_id: str, root=None) -> Path:
+    """The per-run log the queue runner appends to (one block per attempt)."""
+    return logs_dir(root) / "runs" / arm / f"{run_id}.log"
+
+
+def incoming_dir(root=None) -> Path:
+    """Where `scripts/remote/pull.sh` mirrors a remote host's results/runs before `gsp merge` (S6)."""
+    return results_root(root) / "incoming"

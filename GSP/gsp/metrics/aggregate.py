@@ -60,8 +60,10 @@ def _clean(v):
     return v
 
 
-def run_row(reg_row: dict, root=None) -> dict:
-    """Every derived metric of one done run (module doc)."""
+def run_row(reg_row: dict, root=None, inputs_root=None) -> dict:
+    """Every derived metric of one done run (module doc). `root` holds results/runs; `inputs_root` (default: root)
+    the instances and sector files (S6: a queue may write its runs under another results root)."""
+    iroot = root if inputs_root is None else inputs_root
     from ..arms.base import validate_run_dir
     from ..store.ids import parse_inst_id
     from ..store.records import read_record
@@ -82,7 +84,7 @@ def run_row(reg_row: dict, root=None) -> dict:
     row.update(resources(counts, conv, tr))
     if row.get("chk_conv_g2q") is False:
         anomalies.append("conv_g2q")
-    row.update(preprocessing(rec, root))
+    row.update(preprocessing(rec, iroot))
     # the trajectory's last row against run.json
     dl = [abs(float(tr[k][-1]) - float(rec[f"metric_{k}"])) for k in METRIC_KEYS
           if k in tr and rec.get(f"metric_{k}") is not None and np.isfinite(tr[k][-1])]
@@ -99,7 +101,7 @@ def run_row(reg_row: dict, root=None) -> dict:
             anomalies.append("postrun_failed")
         sm = None
         if (d / "final_state.npy").exists():
-            _, _, _, A, _, ctx = rebuild(rec, root)
+            _, _, _, A, _, ctx = rebuild(rec, iroot)
             K = int(rec["K"]) if rec.get("K") is not None else None
             sm = state_metrics(np.load(d / "final_state.npy"), ctx, K=K)
             row["postrun_source"] = "final_state"
@@ -131,7 +133,8 @@ def run_row(reg_row: dict, root=None) -> dict:
     return row
 
 
-def aggregate(root=None, rebuild_all: bool = False, write: bool = True, log=None) -> pd.DataFrame:
+def aggregate(root=None, rebuild_all: bool = False, write: bool = True, log=None,
+              inputs_root=None) -> pd.DataFrame:
     from ..store.index import build_index
     reg = build_index(root)
     if reg.empty:
@@ -152,7 +155,7 @@ def aggregate(root=None, rebuild_all: bool = False, write: bool = True, log=None
             if o is not None and o.get("agg_key") == key:
                 rows.append(o)
                 continue
-            rows.append(run_row(r, root))
+            rows.append(run_row(r, root, inputs_root))
             n_new += 1
         df = pd.DataFrame(rows)
         if not df.empty:

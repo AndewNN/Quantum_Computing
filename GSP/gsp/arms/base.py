@@ -36,21 +36,40 @@ def _seed_table(root=None):
     return load_seed_table(root)
 
 
+@lru_cache(maxsize=4)
+def _restart_seeds(root=None) -> dict:
+    """draw_id -> (restart_seed_r0 .. r4), read once from the seed table (S6: `gsp plan` asks for ~40k seeds)."""
+    st = _seed_table(root)
+    cols = sorted(c for c in st.columns if c.startswith("restart_seed_r"))
+    if st["draw_id"].duplicated().any():
+        raise ValueError("seed table has duplicate draw_ids")
+    return {str(d): tuple(int(v) for v in row) for d, row in zip(st["draw_id"], st[cols].itertuples(index=False))}
+
+
 def restart_seed(draw_id: str, r: int, root=None) -> int:
     """The restart seed r of a draw, read from results/instances/seed_table.csv (PLAN §1.1)."""
-    st = _seed_table(root)
-    row = st[st["draw_id"] == draw_id]
-    if len(row) != 1:
+    seeds = _restart_seeds(root)
+    if draw_id not in seeds:
         raise KeyError(f"{draw_id} is not in the seed table")
-    return int(row.iloc[0][f"restart_seed_r{int(r)}"])
+    return seeds[draw_id][int(r)]
+
+
+def _arm_table() -> dict:
+    """name in run.json -> factory. S7 / S8 add A3, A3d, A4, A6 HERE; `gsp plan` / `gsp run` / the post-run step
+    find every arm through this table (nothing else needs to change)."""
+    from .qaoa import A0, A1
+    from .ramp import A2
+    return {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined")}
+
+
+def registered_arms() -> tuple:
+    return tuple(_arm_table())
 
 
 def make_arm(name: str) -> "Arm":
     """An arm instance by its name in run.json (the post-run step rebuilds circuits through it; S7 / S8 add A3,
-    A3d, A4, A6 here)."""
-    from .qaoa import A0, A1
-    from .ramp import A2
-    table = {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined")}
+    A3d, A4, A6 to `_arm_table`)."""
+    table = _arm_table()
     if name not in table:
         raise KeyError(f"no arm class registered for {name!r}")
     return table[name]()
@@ -179,11 +198,14 @@ class Arm:
 
     def run(self, instance, cell, effort, seed=None, *, rulers=None, root=None, runs_root=None,
             store: bool = True, logger: bool = True, force: bool = False, finalize: bool = True,
-            **kw) -> RunRecord:
+            on_done=None, **kw) -> RunRecord:
         """Run (or load) one configuration. `instance` is an `Instance` (frozen or ad hoc) or an inst_id.
         `root` is where instances / sectors / the seed table are read; `runs_root` (default: root) is where the
         run directory is written. `finalize` (stored runs only): the S5 post-run step -- the 1000-shot sample
-        (samples.npz) and the final-state metrics (postrun.json), `gsp.metrics.postrun.finalize_run`."""
+        (samples.npz) and the final-state metrics (postrun.json), `gsp.metrics.postrun.finalize_run`.
+        `on_done(path, record)` (stored runs only; S6 queue runner) is called after run.json says "done" and before
+        the post-run step: the runner marks its progress phase there. A run stopped inside it or inside the
+        post-run step stays "done" without postrun.json; `gsp run` / `gsp metrics finalize` complete it."""
         from ..instances.adhoc import load_any
         from ..sim import backend
         from ..store.paths import inst_path
@@ -228,6 +250,8 @@ class Arm:
                 atomic_write_bytes(path / "final_state.npy", buf.getvalue())
             write_record(rec, out_root)
             assert run_json_path(rec, root=out_root).exists()
+            if on_done is not None:
+                on_done(path, rec)
             if finalize:
                 from ..metrics.postrun import finalize_run
                 finalize_run(path, root=root, final_state=out.final_state, catch=True)

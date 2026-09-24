@@ -26,7 +26,21 @@ S5:  gsp metrics finalize [--arms A0 ...] [--limit N] [--force]
      gsp stats gbar                   (results/tables/gbar.parquet: gbar_arm(N) of Rule D1 from the frozen set)
      gsp stats d1 [--lam-star 4=0.005 5=...] [--ring-order lex]
                                       (Rule D1 over the stored runs -> results/tables/d1.parquet, d1_choices.parquet)
-Later sessions add plan, run, report, missing, selfcheck.
+S6:  gsp plan [filters] [--lam-star 4=0.005 ...] [--gate-matched 4:5=45 ...] [--recursion-cap A4:4=12 ...]
+              [--optional | --pilot] [--name NAME | --out FILE] [--dry-run] [--order draw|arm]
+                                      (the OFAT envelope -> a queue file; counts per arm and cell first. Filters:
+                                       --arms --N --draws K --q --axes --efforts --restarts R --schedules --tags.
+                                       An unfiltered queue is written only from an `approved` envelope)
+     gsp run --queue FILE [--max-runs N] [--no-retry-failed] [--steal] [--no-aggregate] [--runs-root DIR]
+                                      (sequential, resumable; SIGTERM/SIGINT = clean stop, SIGUSR1 = stop after
+                                       the current run; progress in results/logs/queue_NAME.progress.json)
+     gsp progress [NAME ...]          (the heartbeat / progress files of the queues)
+     gsp missing [--queue FILE | plan filters] [--list] [--out FILE] [--json]
+                                      (which cells / instances / efforts lack done runs, in one call)
+     gsp merge --src DIR [--dry-run]  (fold a pulled remote results/runs shard in; scripts/remote/pull.sh)
+     gsp report [--write]             (stub: runs per arm x status, metrics rows, queues; S15 builds it out)
+     gsp index [--check]              (rebuild the registry; --check validates every run.json)
+Later sessions add selfcheck.
 """
 
 from __future__ import annotations
@@ -68,6 +82,25 @@ def _cmd_index(args) -> int:
     print(f"indexed {len(df)} run(s)")
     if not df.empty and "status" in df:
         print(df.groupby(["arm", "status"]).size().to_string())
+    if getattr(args, "check", False) and not df.empty:
+        from .store.paths import runs_dir
+        from .store.records import read_record, validate_record
+        bad = []
+        dup = df["run_id"].duplicated(keep=False)
+        for r in df[dup].itertuples():
+            bad.append(f"{r.run_dir}: run_id {r.run_id} appears in more than one arm directory")
+        for r in df.itertuples():
+            try:
+                rec = read_record(runs_dir(args.results) / r.run_dir / "run.json")
+                validate_record(rec)
+                if r.run_dir != f"{rec['arm']}/{rec['run_id']}":
+                    raise ValueError(f"directory is not {rec['arm']}/{rec['run_id']}")
+            except Exception as exc:
+                bad.append(f"{r.run_dir}: {exc}")
+        print(f"check: {len(df)} records, {df['run_id'].nunique()} distinct run_ids, {len(bad)} problem(s)")
+        for b in bad[:50]:
+            print("  " + b)
+        return 0 if not bad else 1
     return 0
 
 
@@ -269,6 +302,181 @@ def _cmd_stats(args) -> int:
     raise AssertionError(args.action)
 
 
+# --- S6: plan / run / progress / missing / merge / report ---------------------------------------------------------
+def _kv(items, what):
+    out = {}
+    for x in items or []:
+        try:
+            k, v = x.split("=")
+        except ValueError:
+            raise SystemExit(f"{what}: expected KEY=VALUE, got {x!r}")
+        out[k] = v
+    return out
+
+
+def _plan_inputs(args):
+    from .runner import plan as P
+    env = P.load_envelope(args.envelope)
+    lam = {int(k): float(v) for k, v in _kv(args.lam_star, "--lam-star").items()}
+    gm = {}
+    for k, v in _kv(args.gate_matched, "--gate-matched").items():
+        N, L1 = k.split(":")
+        gm.setdefault(int(N), {})[int(L1)] = int(v)
+    rc = {}
+    for k, v in _kv(args.recursion_cap, "--recursion-cap").items():
+        a, N = k.split(":")
+        rc.setdefault(a, {})[int(N)] = int(v)
+    params = P.PlanParams.from_envelope(env, lam_star=lam or None, gate_matched=gm or None,
+                                        recursion_cap=rc or None, ring_order=args.ring_order)
+    t = lambda x, f=str: None if x is None else tuple(f(v) for v in x)   # noqa: E731
+    flt = P.PlanFilter(arms=t(args.arms), N=t(args.N, int), draws=args.draws, q=t(args.q, float),
+                       axes=t(args.axes), efforts=t(args.efforts, int), restarts=args.restarts,
+                       schedules=t(args.schedules), tags=t(args.tags))
+    return env, params, flt
+
+
+def _add_plan_args(p):
+    p.add_argument("--envelope", default=None, help="envelope yaml (default configs/envelope.yaml)")
+    p.add_argument("--arms", nargs="+", default=None, help="only these arms (A0 A1 A2p A2c A3 A4 A6 A3d)")
+    p.add_argument("--N", type=int, nargs="+", default=None)
+    p.add_argument("--draws", type=int, default=None, help="the first K accepted draws per N (per cell subset)")
+    p.add_argument("--q", type=float, nargs="+", default=None)
+    p.add_argument("--axes", nargs="+", default=None, help="baseline K rule connectivity penalty")
+    p.add_argument("--efforts", type=int, nargs="+", default=None, help="only these depths / ramp depths / caps")
+    p.add_argument("--restarts", type=int, default=None, help="at most R restarts (r < R)")
+    p.add_argument("--schedules", nargs="+", default=None, help="ramp schedules (primary secondary)")
+    p.add_argument("--tags", nargs="+", default=None, help="main gate_matched")
+    p.add_argument("--lam-star", nargs="+", default=None, help="lambda*(N) as N=LAM (S9); else from the envelope")
+    p.add_argument("--gate-matched", nargs="+", default=None, help="L0 as N:L1=L0 (S9, PLAN §1.3)")
+    p.add_argument("--recursion-cap", nargs="+", default=None, help="cap as ARM:N=K (S9, PLAN §1.8)")
+    p.add_argument("--ring-order", default="lex", choices=["lex", "rank"], help="A1 / A2c / A4 ring order (D-9)")
+    p.add_argument("--optional", action="store_true", help="include the optional tier (A3d)")
+    p.add_argument("--pilot", action="store_true", help="the lambda pilot of PLAN §1.4 instead of the sweep")
+
+
+def _cmd_plan(args) -> int:
+    from .runner import plan as P
+    env, params, flt = _plan_inputs(args)
+    log = lambda m: print(m, file=sys.stderr, flush=True)   # noqa: E731
+    full = P.counts(P.expand(env, params, P.PlanFilter(), optional=True, root=args.results))
+    print(f"envelope {env['_path']} status={env.get('status')} harness={env.get('harness_version')} "
+          f"ring_order={params.ring_order}")
+    print(f"S9 inputs: lambda*={params.lam_star or 'unset'} gate-matched L0={params.gate_matched or 'unset'} "
+          f"recursion cap={params.recursion_cap or 'unset'}")
+    print("full grid (the envelope, no filters; optional tier marked): "
+          + ", ".join(f"{a} {v['total']}" + (" [optional]" if v["tier"] != "main" else "")
+                      for a, v in full["per_arm"].items())
+          + f"; total {full['total']} (without the optional tier "
+          + f"{sum(v['total'] for v in full['per_arm'].values() if v['tier'] == 'main')})")
+    selected = args.pilot or flt.active() or args.optional
+    specs = P.build_plan(env, params, flt, optional=args.optional, pilot=args.pilot, order=args.order,
+                         resolve_ids=not args.dry_run, root=args.results, log=log)
+    c = P.counts(specs)
+    title = "lambda pilot (PLAN §1.4)" if args.pilot else ("selected subset" if flt.active() else "the plan")
+    print()
+    print(P.format_counts(c, env, f"{title}: {c['total']} runs, {c['runnable']} runnable"))
+    if args.json:
+        print(json.dumps(c, indent=1))
+    if args.dry_run:
+        return 0
+    if not (args.out or args.name):
+        print("\n(no --name / --out: nothing written)")
+        return 0
+    if not selected and env.get("status") != "approved":
+        print(f"\nrefused: an unfiltered queue (the S10 sweep) is written only from an envelope with "
+              f"status: approved (it is {env.get('status')!r}; PLAN §1.8)", file=sys.stderr)
+        return 2
+    path = args.out or P.default_queue_path(args.name, args.results)
+    meta = {"envelope": env["_path"], "envelope_sha256": env["_sha256"], "envelope_status": env.get("status"),
+            "params": params.as_dict(), "filters": flt.as_dict(), "optional": args.optional, "pilot": args.pilot,
+            "order": args.order, "counts": c, "full_grid": {a: v["total"] for a, v in full["per_arm"].items()}}
+    from .store.records import git_info
+    meta["git_sha"], meta["git_dirty"] = git_info()
+    side = P.write_queue(specs, path, meta)
+    print(f"\nwrote {side['n_runs']} runnable specs to {path} ({side['n_placeholders']} placeholders not queued); "
+          f"sidecar {P.sidecar_path(path)}")
+    return 0
+
+
+def _cmd_run(args) -> int:
+    from .runner.queue import EXIT_BUSY, EXIT_USAGE, QueueBusy, run_queue
+    from .runner.plan import PlanError
+    try:
+        out = run_queue(args.queue, root=args.results, out_root=args.runs_root, retry_failed=not args.no_retry_failed,
+                        steal=args.steal, gpu=not args.no_gpu_guard, finalize=not args.no_finalize,
+                        aggregate=not args.no_aggregate, heartbeat_s=args.heartbeat, max_runs=args.max_runs,
+                        debug_pause_postrun=args.debug_pause_postrun)
+    except QueueBusy as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return EXIT_BUSY
+    except (PlanError, FileNotFoundError) as exc:
+        print(f"bad queue: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    print(json.dumps(out))
+    return int(out["exit_code"])
+
+
+def _cmd_progress(args) -> int:
+    from .runner.queue import format_progress, read_progress
+    from .store.paths import logs_dir
+    names = args.names or sorted(p.name[len("queue_"):-len(".progress.json")]
+                                 for p in logs_dir(args.results).glob("queue_*.progress.json"))
+    if not names:
+        print("no progress files")
+        return 1
+    for n in names:
+        pr = read_progress(n, args.results)
+        print(json.dumps(pr, indent=1) if args.json else format_progress(pr))
+    return 0
+
+
+def _cmd_missing(args) -> int:
+    from .runner import missing as M
+    from .runner import plan as P
+    if args.queue:
+        specs = P.read_queue(args.queue)
+        src = f"queue {args.queue}"
+    else:
+        env, params, flt = _plan_inputs(args)
+        specs = P.build_plan(env, params, flt, optional=args.optional, pilot=args.pilot, root=args.results)
+        src = f"plan of {env['_path']} (status {env.get('status')}; filters {flt.as_dict() or 'none'})"
+    out_root = args.runs_root or args.results
+    df = M.coverage(specs, out_root)
+    if args.json:
+        print(M.dumps(M.as_json(df)))
+    else:
+        print(f"source: {src}")
+        print(M.summarize(df, max_lines=args.max_lines))
+        if args.list:
+            print()
+            print(M.list_lines(df))
+    if args.out:
+        n = M.write_missing_queue(df, args.out)
+        print(f"wrote {n} runnable missing specs to {args.out}", file=sys.stderr)
+    return 0 if (df["state"] == "done").all() else 1
+
+
+def _cmd_merge(args) -> int:
+    from .runner.merge import merge_runs
+    from .store.index import build_index
+    out = merge_runs(args.src, args.results, dry_run=args.dry_run,
+                     log=(lambda m: print(m, file=sys.stderr)) if args.verbose else None)
+    if not args.dry_run:
+        df = build_index(args.results)
+        out["indexed"] = len(df)
+    print(json.dumps(out, indent=1))
+    return 0 if not out["invalid"] else 1
+
+
+def _cmd_report(args) -> int:
+    from .runner import report
+    if args.write:
+        print(f"written to {report.write(args.results)}", file=sys.stderr)
+    else:
+        print(report.markdown(args.results))
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="gsp", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -357,7 +565,63 @@ def main(argv=None) -> int:
 
     px = sub.add_parser("index", help="rebuild the run registry from every run.json")
     px.add_argument("--results", default=None)
+    px.add_argument("--check", action="store_true", help="validate every run.json (hash, directory, schema)")
     px.set_defaults(func=_cmd_index)
+
+    ppl = sub.add_parser("plan", help="the OFAT envelope -> a queue file; counts per arm and cell (S6)")
+    _add_plan_args(ppl)
+    ppl.add_argument("--results", default=None, help="results root holding the instances / sectors")
+    ppl.add_argument("--name", default=None, help="write results/queues/NAME.jsonl")
+    ppl.add_argument("--out", default=None, help="write the queue here instead")
+    ppl.add_argument("--order", default="draw", choices=["draw", "arm"])
+    ppl.add_argument("--dry-run", action="store_true", help="counts only (no run_ids, nothing written)")
+    ppl.add_argument("--json", action="store_true", help="also print the counts as JSON")
+    ppl.set_defaults(func=_cmd_plan)
+
+    prn = sub.add_parser("run", help="run a queue file: sequential, resumable, clean stop on SIGTERM/SIGINT (S6)")
+    prn.add_argument("--queue", required=True)
+    prn.add_argument("--results", default=None, help="results root holding the instances / sectors")
+    prn.add_argument("--runs-root", default=None, help="results root the runs / logs are written to (default "
+                                                       "--results)")
+    prn.add_argument("--max-runs", type=int, default=None, help="run at most N new runs, then stop")
+    prn.add_argument("--no-retry-failed", action="store_true", help="skip runs whose run.json says failed")
+    prn.add_argument("--steal", action="store_true", help="re-run 'running' records written by another host")
+    prn.add_argument("--no-finalize", action="store_true", help="skip the post-run step (not for production)")
+    prn.add_argument("--no-aggregate", action="store_true", help="skip index + aggregate at the end")
+    prn.add_argument("--heartbeat", type=float, default=30.0, help="progress-file heartbeat period (s)")
+    prn.add_argument("--no-gpu-guard", action="store_true", help="do not refuse when the GPU is busy")
+    prn.add_argument("--debug-pause-postrun", type=float, default=0.0,
+                     help="TEST ONLY: sleep S seconds between 'done' and the post-run step (kill tests)")
+    prn.set_defaults(func=_cmd_run)
+
+    ppg = sub.add_parser("progress", help="show queue progress / heartbeat files (S6)")
+    ppg.add_argument("names", nargs="*", help="queue names (default: every progress file)")
+    ppg.add_argument("--results", default=None)
+    ppg.add_argument("--json", action="store_true")
+    ppg.set_defaults(func=_cmd_progress)
+
+    pms = sub.add_parser("missing", help="which cells / instances / efforts lack done runs (S6)")
+    pms.add_argument("--queue", default=None, help="a queue file (default: the plan from the filters below)")
+    _add_plan_args(pms)
+    pms.add_argument("--results", default=None)
+    pms.add_argument("--runs-root", default=None)
+    pms.add_argument("--list", action="store_true", help="one line per missing run")
+    pms.add_argument("--out", default=None, help="write the runnable missing specs as a queue file")
+    pms.add_argument("--json", action="store_true")
+    pms.add_argument("--max-lines", type=int, default=40)
+    pms.set_defaults(func=_cmd_missing)
+
+    pmg = sub.add_parser("merge", help="fold a pulled remote results/runs shard into the store (S6)")
+    pmg.add_argument("--src", required=True)
+    pmg.add_argument("--results", default=None)
+    pmg.add_argument("--dry-run", action="store_true")
+    pmg.add_argument("--verbose", action="store_true")
+    pmg.set_defaults(func=_cmd_merge)
+
+    prp = sub.add_parser("report", help="harness report stub (S15 builds it out)")
+    prp.add_argument("--results", default=None)
+    prp.add_argument("--write", action="store_true", help="write reports/runs.md")
+    prp.set_defaults(func=_cmd_report)
 
     args = p.parse_args(argv)
     return args.func(args)
