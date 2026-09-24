@@ -5,14 +5,16 @@ e^{i r rho_k} = U_k e^{i r |0..0><0..0|} U_k^dagger; the leading e^{-i r rho_k} 
 as a global phase and is dropped. So U_{k+1} = e^{i r H} U_k P(r) U_k^dagger e^{-i r H} U_k (operator order) with
 P(a) = e^{i a |0..0><0..0|}: three copies of U_k per step, and U_k carries 3^k copies of U_0.
 
-Two step conventions (`STEP_UNITS`; the r of the cost exponential r_H and of the phase r_rho, r_H r_rho = s always):
-  "plan"        r_H = r_rho = sqrt(s), with s = g / sigma_H and the un-boosted H in the circuit: PLAN §1.5 as written
-                (the default, the arms' `step_units` extra).
-  "normalized"  the circuit carries H / sigma_H and r = sqrt(g) (r_H = sqrt(s / sigma_H), r_rho = sqrt(s sigma_H)):
-                the example_dbqite.py regime (its sigma_H is 1.27) on every instance. Behind the flag (STATUS S8,
-                O-13): with sigma_H ~ 1e-4 (A4, un-boosted H_obj) "plan" gives r = 8..78 rad, far outside the
-                group-commutator regime (r << 1 and r sigma_H << 1).
-Both give the ideal flow's leading term e^{s [rho, H]}; they differ at O(r^3).
+Two step conventions (`STEP_UNITS`; the r of the cost exponential r_H and of the phase r_rho, r_H r_rho = s always,
+with s = g / sigma_H the step on the un-boosted H, g the grid value):
+  "normalized"  (the DEFAULT since S8b; PLAN §1.5 as corrected) the circuit carries H / sigma_H and r = sqrt(g), i.e. the
+                step s = g on H / sigma_H (r_H = sqrt(s / sigma_H) on the un-boosted H, r_rho = sqrt(s sigma_H)): the
+                example_dbqite.py regime (its sigma_H is 1.27) on every instance, r <= 0.9.
+  "plan"        r_H = r_rho = sqrt(s) with the un-boosted H in the circuit: the S0b wording of §1.5, kept as a flag
+                (O-13, resolved in S8b). With sigma_H ~ 1e-4 (A4, un-boosted H_obj) it gives r = 8..78 rad, far outside
+                the group-commutator regime (r << 1 and r sigma_H << 1).
+Both give the ideal flow's leading term e^{s [rho, H]}; they differ at O(r^3). In both, a run's `params` / `s_k` are
+s (the step on the un-boosted H) and `g_k` = s sigma_H (the step on H / sigma_H, the grid value).
 
 Simulation (`DBCircuit`): the kernel `dbqite_kernel.kernel_dbqite` runs a TOKEN list (`recursion_tokens`) over two base
 segments (U_0 and the cost exponential), so the per-call kernel arguments are O(3^k) tokens, not O(3^k |U_0|) gates.
@@ -44,6 +46,7 @@ from ..compile.decompose import Angle, Gate
 
 TOK_U0, TOK_U0_INV, TOK_COST, TOK_PHASE = 0, 1, 2, 3
 STEP_UNITS = ("plan", "normalized")
+DEFAULT_STEP_UNITS = "normalized"          # S8b (PLAN §1.5 corrected; O-13 resolved)
 GRID = (0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.8)            # PLAN §1.5: example_dbqite.py's grid, in units of 1 / sigma_H
 COUNT_KEYS = ("cx_ii", "cx_iii", "t_ii", "t_iii", "tdepth_ii", "tdepth_iii")
 DB_OPS = ("x", "h", "cx", "rx", "ry", "rz", "mcry", "crz")
@@ -241,7 +244,7 @@ class DBCircuit:
     """One arm's recursion: start circuit U_0, Hamiltonian, step convention (module doc). Params of every call =
     the list of chosen step sizes s_1..s_k (un-boosted units of H), the trajectory's `params` row."""
 
-    def __init__(self, n: int, start: list, ham: DBHam, *, kind: str, sigma: float, units: str = "plan",
+    def __init__(self, n: int, start: list, ham: DBHam, *, kind: str, sigma: float, units: str = DEFAULT_STEP_UNITS,
                  start_counts: dict | None = None, start_mc: int = 0, start_abstract: list | None = None,
                  meta: dict | None = None):
         if units not in STEP_UNITS:

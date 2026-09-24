@@ -273,11 +273,12 @@ def config_label(rec: dict) -> str:
 
 
 def d1_spec(lam_star: dict | None = None, ring_order: str = "lex", a4_cap: dict | None = None,
-            db_step_units: str = "plan") -> dict:
+            db_step_units: str = "normalized") -> dict:
     """Registry filters of the runs that enter D1 (a filter value None = the key must be missing / NaN).
     lam_star: {N: lambda*(N)} for the penalty arms (S9); None = no lambda filter (S5 exercise only).
     a4_cap: {N: recursion cap} (S9): A4 enters with effort = cap(N) only (S8: the smoke / timing records have other
-    efforts; one trajectory per instance); None = no effort filter. db_step_units: A4's step convention (S8, O-13)."""
+    efforts; one trajectory per instance); None = no effort filter. db_step_units: A4's step convention ("normalized",
+    PLAN §1.5 as corrected in S8b; "plan" only to read the flag's runs)."""
     sector = dict(D1_CELL, ring_order=ring_order, sector_source="ga")
     return {"A0": {"init": "random", "_lam": lam_star},
             "A1": dict(sector, init="random"),

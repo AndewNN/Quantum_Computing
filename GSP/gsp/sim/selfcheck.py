@@ -16,6 +16,8 @@ The set:
                   A3   A0's circuit at depth 2 at A3's ramp init (varqite_routes.py);
                   A4   the DB-QITE circuit U_2 (star prep, H_obj) at s = (0.2, 0.5) / sigma_H;
                   A6   the DB-QITE circuit U_2 (H^n, H(lam)) at s = (0.2, 0.5) / sigma_H;
+                  (A4 / A6 entries carry their `step_units` explicitly; schema 2 records the default, "normalized";
+                  a schema-1 fixture (S8) recorded "plan", which `compare` assumes when the key is missing)
   trajectories  A1_adamw   30 AdamW iterations of A1 at N04e004q1.5, depth 5 (f per iteration, final parameters);
                 A3_example A3's production estimators (M1 forward stencil + C1) on example_varqite.py's 3-qubit instance
                            at L = 1, 401 steps of dtau 0.01 (S7: well conditioned, GPU vs numpy 3e-12; the N = 7 M1 loop
@@ -36,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
-SCHEMA = 1
+SCHEMA = 2                              # 2 (S8b): A4 / A6 entries name their step_units
 INSTANCES = ("N04e004q1.5", "N05e000q1.5", "N06e000q1.5")
 CELL = {"connectivity": "ring", "rule": "violation", "K": 12}
 LAM = 0.005
@@ -49,6 +51,7 @@ TOL_STATE = 1e-12
 TOL_ENERGY = 1e-12
 TOL_TRAJ = 1e-9
 CIRCUIT_ARMS = ("A0", "A1", "A2p", "A2c", "A3", "A4", "A6")
+DB_ARMS = ("A4", "A6")
 
 
 def fixture_path(version: str | None = None) -> Path:
@@ -75,8 +78,11 @@ def _unb64(s: str) -> np.ndarray:
 
 
 # --- the circuits ------------------------------------------------------------------------------------------------
-def _circuit(arm: str, inst, root=None):
-    """(object with energy / state, params, energy scale) of one fixed circuit (module doc)."""
+def _circuit(arm: str, inst, root=None, units: str | None = None):
+    """(object with energy / state, params, energy scale) of one fixed circuit (module doc); `units` = the DB-QITE
+    step convention of A4 / A6 (default: the arms' default)."""
+    from ..circuits.dbqite import DEFAULT_STEP_UNITS
+    units = DEFAULT_STEP_UNITS if units is None else units
     from ..arms.base import draw_of, make_arm, restart_seed
     from ..arms.dbqite import confined_db_circuit, penalty_db_circuit
     from ..train.init import init_params
@@ -99,10 +105,10 @@ def _circuit(arm: str, inst, root=None):
         db_, dg = schedule("primary")
         return A, np.asarray(ramp_params(RAMP_P, db_, dg, A.alpha, cfg.extra("ramp_sign")), dtype=np.float64), A.alpha
     if arm == "A4":
-        C, _ = confined_db_circuit(inst, CELL["rule"], CELL["K"], root=root)
+        C, _ = confined_db_circuit(inst, CELL["rule"], CELL["K"], root=root, units=units)
         return C, np.asarray(DB_G, dtype=np.float64) / C.sigma, 1.0
     if arm == "A6":
-        C = penalty_db_circuit(inst, LAM)
+        C = penalty_db_circuit(inst, LAM, units=units)
         return C, np.asarray(DB_G, dtype=np.float64) / C.sigma, 1.0
     raise ValueError(arm)
 
@@ -121,18 +127,26 @@ def circuit_cases(root=None, log=None) -> list[dict]:
             obj, params, alpha = _circuit(arm, inst, root)
             t = time.perf_counter()
             e, psi = _run_circuit(obj, params)
-            out.append({"id": f"{arm}/{iid}", "arm": arm, "inst_id": iid, "n": int(inst.n), "params": params.tolist(),
-                        "energy": e, "energy_note": "observe of alpha H (A0-A3) / un-boosted H (A4, A6)",
-                        "state_b64": _b64(psi), "state_dim": int(psi.size), "wall_s": time.perf_counter() - t})
+            case = {"id": f"{arm}/{iid}", "arm": arm, "inst_id": iid, "n": int(inst.n), "params": params.tolist(),
+                    "energy": e, "energy_note": "observe of alpha H (A0-A3) / un-boosted H (A4, A6)",
+                    "state_b64": _b64(psi), "state_dim": int(psi.size), "wall_s": time.perf_counter() - t}
+            if arm in DB_ARMS:
+                case["step_units"] = obj.units
+            out.append(case)
             if log:
                 log(f"circuit {arm}/{iid}: E = {e:.15g}")
     return out
 
 
+def _db_units(entry: dict) -> str:
+    """The step convention of a fixture's A4 / A6 entry: explicit from schema 2; the S8 (schema 1) fixture was "plan"."""
+    return str(entry.get("step_units", "plan"))
+
+
 def _recompute_circuit(case: dict, root=None) -> tuple:
     from ..instances.instance import load_instance
     inst = load_instance(case["inst_id"], root)
-    obj, _, _ = _circuit(case["arm"], inst, root)
+    obj, _, _ = _circuit(case["arm"], inst, root, units=_db_units(case) if case["arm"] in DB_ARMS else None)
     return _run_circuit(obj, np.asarray(case["params"], dtype=np.float64))
 
 
@@ -191,22 +205,23 @@ def _traj_a3d(x0=None, root=None) -> dict:
             "n_iter": int(res.n_steps)}
 
 
-def _traj_db(arm: str, root=None) -> dict:
+def _traj_db(arm: str, root=None, units: str | None = None) -> dict:
     from ..arms.dbqite import confined_db_circuit, penalty_db_circuit, run_dbqite
-    from ..circuits.dbqite import GRID
+    from ..circuits.dbqite import DEFAULT_STEP_UNITS, GRID
     from ..instances.instance import load_instance
+    units = DEFAULT_STEP_UNITS if units is None else units
     inst = load_instance(TRAJ_INST, root)
-    C = (confined_db_circuit(inst, CELL["rule"], CELL["K"], root=root)[0] if arm == "A4"
-         else penalty_db_circuit(inst, LAM))
+    C = (confined_db_circuit(inst, CELL["rule"], CELL["K"], root=root, units=units)[0] if arm == "A4"
+         else penalty_db_circuit(inst, LAM, units=units))
     res = run_dbqite(C, np.asarray(GRID) / C.sigma, 5)
     return {"series": {"E": res.E_loop.tolist(), "grid_idx": res.grid_idx.astype(float).tolist()},
-            "final_params": res.s.tolist(), "n_iter": int(res.n_steps), "sigma_H": C.sigma}
+            "final_params": res.s.tolist(), "n_iter": int(res.n_steps), "sigma_H": C.sigma, "step_units": C.units}
 
 
 TRAJECTORIES = ("A1_adamw", "A3_example", "A3d", "A4_db", "A6_db")
 
 
-def _trajectory(name: str, x0=None, root=None) -> dict:
+def _trajectory(name: str, x0=None, root=None, units: str | None = None) -> dict:
     if name == "A1_adamw":
         return _traj_a1(x0, root)
     if name == "A3_example":
@@ -214,7 +229,7 @@ def _trajectory(name: str, x0=None, root=None) -> dict:
     if name == "A3d":
         return _traj_a3d(x0, root)
     if name in ("A4_db", "A6_db"):
-        return _traj_db(name[:2], root)
+        return _traj_db(name[:2], root, units)
     raise ValueError(name)
 
 
@@ -289,7 +304,7 @@ def compare(path=None, root=None, log=None, only_circuits: bool = False, arms=No
     if not only_circuits:
         for name, ref in fx["trajectories"].items():
             x0 = ref.get("x0")
-            got = _trajectory(name, x0=x0, root=root)
+            got = _trajectory(name, x0=x0, root=root, units=_db_units(ref) if name in ("A4_db", "A6_db") else None)
             errs = {k: _series_err(got["series"].get(k, []), v) for k, v in ref["series"].items()}
             errs["final_params"] = _series_err(got["final_params"], ref["final_params"])
             worst = max(errs.values()) if errs else 0.0

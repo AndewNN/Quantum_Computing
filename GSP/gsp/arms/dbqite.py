@@ -15,10 +15,17 @@ Charging (PLAN §1.5 / §1.7): step k runs |grid| = 7 energy circuits of U_k; g2
 c(U_k) of `circuits.dbqite.recursion_counts` (the 3^k growth). counts.json carries `charge_model: series` with the
 per-circuit counts of U_0..U_T and the cumulative charges (`metrics.resources` reads them).
 
-Config extras (hashed): start ("star" | "hadamard"), grid (the 7 values), grid_unit ("sigma_H"), step_units ("plan" =
-PLAN §1.5 as written, the default; "normalized" = the circuit carries H / sigma_H with r = sqrt(g): STATUS S8 O-13),
-A4 also ring_order (the star centre; "lex") and sector_source ("ga"). R = 1 (deterministic): restart must be 0;
-seed = the draw's restart seed r = 0 (the post-run sample only). Effort = the number of recursion steps (the cap).
+Config extras (hashed): start ("star" | "hadamard"), grid (the 7 values), grid_unit ("sigma_H"), step_units (always
+written explicitly: "normalized" = the circuit carries H / sigma_H with r = sqrt(g), the default since S8b (PLAN §1.5
+corrected, O-13 resolved); "plan" = the S0b wording, a flag), A4 also ring_order (the star centre; "lex") and
+sector_source ("ga"). R = 1 (deterministic): restart must be 0; seed = the draw's restart seed r = 0 (the post-run
+sample only). Effort = the number of recursion steps (the cap).
+
+Leakage bookkeeping (S8b; Rule C1 state level, O-14): every step logs norm = sum |psi|^2, norm_err = norm - 1 and, for A4,
+in_mass (= p_sector), out_mass (the off-sector mass, summed directly), leak_raw = 1 - p_sector (S5's estimator, which
+includes the norm drift) and leak_rel = out_mass / norm (norm-free). Runs stored before S8b carry p_sector / out_mass /
+norm_err only; `backfill_leakage` replays them into a sidecar `leakage.npz` (files added, nothing rewritten) and
+`db_leakage(run_dir)` reads either source.
 """
 
 from __future__ import annotations
@@ -49,7 +56,7 @@ def grid_values(cfg_grid: str) -> tuple:
 
 # --- circuits of a config ------------------------------------------------------------------------------------------
 def confined_db_circuit(inst, rule: str, K: int, sector_source: str = "ga", ring_order: str = "lex",
-                        units: str = "plan", root=None) -> tuple:
+                        units: str = db.DEFAULT_STEP_UNITS, root=None) -> tuple:
     """(DBCircuit, SectorView) of A4 on one instance and cell."""
     from ..compile import transpile as tp
     from ..stats.c1 import mc_gate_count
@@ -67,7 +74,7 @@ def confined_db_circuit(inst, rule: str, K: int, sector_source: str = "ga", ring
     return C, sv
 
 
-def penalty_db_circuit(inst, lam: float, units: str = "plan") -> db.DBCircuit:
+def penalty_db_circuit(inst, lam: float, units: str = db.DEFAULT_STEP_UNITS) -> db.DBCircuit:
     """DBCircuit of A6: H^n start, H(lam) un-boosted, sigma_H over all 2^n strings."""
     if lam is None:
         raise ValueError("A6 needs lam (lambda*(N) from S9; 0.005 until then)")
@@ -180,11 +187,7 @@ class DBLogger:
         row = self.ctx.evaluate(prob) if self.ctx is not None else {"energy": float(prob @ self.diag)}
         e = float(prob @ self.diag)
         row["variance"] = float(prob @ self.diag ** 2 - e ** 2)
-        row["norm_err"] = float(prob.sum()) - 1.0
-        if self.sector_idx is not None:
-            mask = np.zeros(prob.size, dtype=bool)
-            mask[self.sector_idx] = True
-            row["out_mass"] = float(prob[~mask].sum())
+        row.update(leakage_fields(prob, self.sector_idx))
         self.t.append(int(t))
         self.rows.append(row)
 
@@ -194,6 +197,70 @@ class DBLogger:
         for k in keys:
             out[k] = np.array([r[k] for r in self.rows], dtype=np.float64)
         return out
+
+
+def leakage_fields(prob: np.ndarray, sector_idx=None) -> dict:
+    """norm, norm_err and (with a sector) in_mass, out_mass, leak_raw = 1 - in_mass, leak_rel = out_mass / norm."""
+    prob = np.asarray(prob, dtype=np.float64)
+    norm = float(prob.sum())
+    out = {"norm": norm, "norm_err": norm - 1.0}
+    if sector_idx is not None:
+        mask = np.zeros(prob.size, dtype=bool)
+        mask[np.asarray(sector_idx, dtype=np.int64)] = True
+        ins = float(prob[mask].sum())
+        om = float(prob[~mask].sum())
+        out.update({"in_mass": ins, "out_mass": om, "leak_raw": 1.0 - ins, "leak_rel": om / norm if norm > 0 else np.nan})
+    return out
+
+
+LEAK_FIELDS = ("norm", "norm_err", "in_mass", "out_mass", "leak_raw", "leak_rel")
+LEAKAGE_FILE = "leakage.npz"
+
+
+def db_leakage(run_dir) -> dict | None:
+    """The per-step leakage fields of a stored A4 / A6 run: from trajectory.npz (runs from S8b on) or from the replayed
+    sidecar leakage.npz (`backfill_leakage`, the S8 runs). None if neither has them."""
+    from pathlib import Path
+    from ..store.io import load_npz
+    d = Path(run_dir)
+    tr = load_npz(d / "trajectory.npz")
+    if "norm" in tr:
+        return {"t": tr["t"], **{k: tr[k] for k in LEAK_FIELDS if k in tr}, "source": "trajectory"}
+    if (d / LEAKAGE_FILE).exists():
+        z = load_npz(d / LEAKAGE_FILE)
+        return {"t": z["t"], **{k: z[k] for k in LEAK_FIELDS if k in z}, "source": "replay"}
+    return None
+
+
+def backfill_leakage(run_dir, root=None, force: bool = False) -> dict:
+    """Replay every psi_t (t = 0..T) of a stored A4 / A6 run from its run.json and params, write leakage.npz with the
+    LEAK_FIELDS per step (files added only), and check the replay against the stored trajectory (p_sector, out_mass,
+    norm_err must agree exactly: same kernel, same arguments)."""
+    from pathlib import Path
+    from ..metrics.postrun import rebuild
+    from ..store.io import load_npz, save_npz
+    from ..store.records import read_record
+    d = Path(run_dir)
+    if (d / LEAKAGE_FILE).exists() and not force:
+        return {"status": "exists"}
+    rec = read_record(d / "run.json")
+    if rec["arm"] not in ("A4", "A6") or rec.get("status") != "done":
+        raise ValueError(f"{rec['run_id']}: not a done A4 / A6 run")
+    tr = load_npz(d / "trajectory.npz")
+    _, _, _, C, sector_idx, _ = rebuild(rec, root)
+    s = [float(v) for v in np.asarray(tr["params"][-1]) if np.isfinite(v)]
+    T = int(tr["t"][-1])
+    rows = [leakage_fields(np.abs(C.state(s[:t])) ** 2, sector_idx) for t in range(T + 1)]
+    out = {"t": np.arange(T + 1, dtype=np.int64)}
+    for k in rows[0]:
+        out[k] = np.array([r[k] for r in rows], dtype=np.float64)
+    chk = {}
+    for k, ref in (("in_mass", "p_sector"), ("out_mass", "out_mass"), ("norm_err", "norm_err")):
+        if k in out and ref in tr:
+            chk[f"replay_{k}_max_abs"] = float(np.max(np.abs(out[k] - np.asarray(tr[ref], dtype=np.float64))))
+    save_npz(d / LEAKAGE_FILE, {**out, "run_id": np.array(rec["run_id"]), "source": np.array("replay_S8b"),
+                                **{k: np.float64(v) for k, v in chk.items()}})
+    return {"status": "written", "T": T, **chk}
 
 
 # --- counts ----------------------------------------------------------------------------------------------------------
@@ -222,6 +289,14 @@ def db_counts(C: db.DBCircuit, res: DBResult) -> dict:
 
 
 # --- the arms --------------------------------------------------------------------------------------------------------
+def _units(cfg) -> str:
+    """A stored config always names its step convention (hashed); a config without one is refused, never defaulted."""
+    u = cfg.extra("step_units")
+    if u not in db.STEP_UNITS:
+        raise ValueError(f"{cfg.arm} config without a valid step_units ({u!r})")
+    return u
+
+
 class DBArm(Arm):
     effort_kind = "steps"
     start_kind = "?"
@@ -301,8 +376,13 @@ class DBArm(Arm):
             "sim_gates_final": int(traj["sim_gates"][-1])})
         if "p_sector" in rows:
             leak = 1.0 - np.asarray(rows["p_sector"])
-            metrics["leak_max"] = float(np.nanmax(leak))
+            metrics["leak_max"] = float(np.nanmax(leak))                          # signed (S8 name, kept)
             metrics["out_mass_max"] = float(np.nanmax(rows["out_mass"])) if "out_mass" in rows else None
+            if "leak_rel" in rows:
+                metrics["leak_raw_abs_max"] = float(np.nanmax(np.abs(rows["leak_raw"])))
+                metrics["leak_rel_max"] = float(np.nanmax(rows["leak_rel"]))
+        if "norm_err" in rows:
+            metrics["norm_err_abs_max"] = float(np.nanmax(np.abs(rows["norm_err"])))
         per_step = np.diff(res.wall_hist)
         timings = {"setup_s": setup_s, "train_s": float(res.wall_hist[-1]), "logger_s": res.logger_s,
                    "post_s": post_s, "per_step_s": float(res.wall_hist[-1] / T) if T else None,
@@ -329,7 +409,8 @@ class A4(DBArm):
     start_kind = "star"
 
     def config(self, inst, cell, effort, seed, *, restart: int = 0, ring_order: str = "lex",
-               sector_source: str = "ga", step_units: str = "plan", adhoc: bool = False, root=None) -> RunConfig:
+               sector_source: str = "ga", step_units: str = db.DEFAULT_STEP_UNITS, adhoc: bool = False,
+               root=None) -> RunConfig:
         if int(restart) != 0:
             raise ValueError("A4 is deterministic (R = 1): restart must be 0")
         if cell is None or cell.get("connectivity") != "adaptive":
@@ -346,7 +427,7 @@ class A4(DBArm):
 
     def ansatz(self, cfg, inst, root=None):
         C, sv = confined_db_circuit(inst, cfg.rule, cfg.K, cfg.extra("sector_source", "ga"),
-                                    cfg.extra("ring_order", "lex"), cfg.extra("step_units", "plan"), root)
+                                    cfg.extra("ring_order", "lex"), _units(cfg), root)
         return C, sv.idx
 
 
@@ -356,7 +437,7 @@ class A6(DBArm):
     encoding = "penalty"
     start_kind = "hadamard"
 
-    def config(self, inst, cell, effort, seed, *, lam=None, restart: int = 0, step_units: str = "plan",
+    def config(self, inst, cell, effort, seed, *, lam=None, restart: int = 0, step_units: str = db.DEFAULT_STEP_UNITS,
                adhoc: bool = False, root=None) -> RunConfig:
         if int(restart) != 0:
             raise ValueError("A6 is deterministic (R = 1): restart must be 0")
@@ -368,7 +449,7 @@ class A6(DBArm):
                          extras=self._extras(step_units, inst_adhoc=True if adhoc else None))
 
     def ansatz(self, cfg, inst, root=None):
-        return penalty_db_circuit(inst, cfg.lam, cfg.extra("step_units", "plan")), None
+        return penalty_db_circuit(inst, cfg.lam, _units(cfg)), None
 
 
 ARMS = {"A4": A4, "A6": A6}

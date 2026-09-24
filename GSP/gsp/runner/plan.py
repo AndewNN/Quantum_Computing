@@ -15,8 +15,9 @@ Registry-driven expansion of `configs/envelope.yaml` (`arms:`, and `optional_tie
                  cells), `ramp_depths` x `schedules` (A2), `recursion_steps` -> one trajectory to the cap (A4, A6)
   restarts       r = 0 .. R-1 with R = the arm's `restarts` (A0's gate-matched depths: `gate_matched_restarts`,
                  default R, cut 2 of §1.8)
-  kwargs         candidates restart / lam / schedule_tag / ring_order, filtered by the signature of the registered
-                 arm's `config`, so the arms of S7 / S8 plug in through `make_arm` alone
+  kwargs         candidates restart / lam / schedule_tag / ring_order / step_units (S8b: A4 / A6, from the envelope
+                 entry), filtered by the signature of the registered arm's `config`, so the arms of S7 / S8 plug in
+                 through `make_arm` alone
 A spec is a **placeholder** (counted, never queued) when its arm is not registered yet, or when it needs an S9
 input that is not set: lambda*(N), the gate-matched depths, the recursion cap. Those come from envelope.yaml
 (`lambda_star`, `gate_matched_depths`, `recursion_cap`) or override it through `PlanParams`.
@@ -43,7 +44,7 @@ from ..store.io import atomic_write_bytes
 from ..store.paths import configs_dir, queues_dir
 
 PLAN_SCHEMA = 1
-KW_CANDIDATES = ("restart", "lam", "schedule_tag", "ring_order")
+KW_CANDIDATES = ("restart", "lam", "schedule_tag", "ring_order", "step_units")
 PENALTY_ROW = "penalty|N{N}"
 REASONS = ("arm_not_registered", "lambda_star", "gate_matched_depth", "recursion_cap")
 
@@ -329,6 +330,8 @@ def expand(env: dict | None = None, params: PlanParams | None = None, flt: PlanF
                             kw["schedule_tag"] = sched
                         if enc == "confined":
                             kw["ring_order"] = params.ring_order
+                        if entry.get("step_units") is not None:        # S8b: A4 / A6 (DB-QITE step convention)
+                            kw["step_units"] = str(entry["step_units"])
                         specs.append({
                             "arm": name, "encoding": enc, "tier": tier, "secondary": bool(entry.get("secondary", False)),
                             "N": N, "draw_id": inst.draw_id, "e": int(inst.e), "inst_id": inst.inst_id,

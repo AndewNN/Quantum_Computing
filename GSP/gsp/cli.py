@@ -19,7 +19,7 @@ S4:  gsp arms smoke                   (every §1.2 cell at N = 4: A0 / A1 / A2p 
      gsp arms run --arm A1 --inst N04e004q1.5 --effort 5 [--K 12 --rule violation --conn ring] [--lam ...]
                                       (S7: --arm A3 | A3d --lam 0.005 [--n-steps 10] runs VarQITE)
                                       (S8: --arm A4 --effort 5 [--K 12 --rule violation] / --arm A6 --lam 0.005
-                                       --effort 5 [--step-units plan|normalized] runs DB-QITE for 5 steps)
+                                       --effort 5 [--step-units normalized|plan] runs DB-QITE for 5 steps)
      (scripts/s4_legacy_checks.py: the legacy-equivalence numbers, results/tables/s4_legacy.json)
 S5:  gsp metrics finalize [--arms A0 ...] [--limit N] [--force]
                                       (GPU: samples.npz + postrun.json for the stored runs that lack them)
@@ -565,8 +565,9 @@ def main(argv=None) -> int:
     pa.add_argument("--no-write", action="store_true", help="report: print only")
     pa.add_argument("--arm", choices=["A0", "A1", "A2p", "A2c", "A3", "A3d", "A4", "A6"], default="A1",
                     help="run: the arm")
-    pa.add_argument("--step-units", choices=["plan", "normalized"], default="plan",
-                    help="run (A4 / A6): the DB-QITE step convention (S8, O-13; default = PLAN §1.5 as written)")
+    pa.add_argument("--step-units", choices=["normalized", "plan"], default="normalized",
+                    help="run (A4 / A6): the DB-QITE step convention (default normalized = PLAN §1.5 as corrected in "
+                         "S8b; plan = the S0b wording, a flag)")
     pa.add_argument("--n-steps", type=int, default=None, help="run (A3 / A3d): step cap for a smoke run (default 300)")
     pa.add_argument("--inst", default=None, help="run: inst_id")
     pa.add_argument("--effort", type=int, default=5, help="run: depth L (A0/A1) or ramp depth p (A2)")

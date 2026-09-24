@@ -229,16 +229,22 @@ def test_arm_configs(n4):
     cell = {"connectivity": "adaptive", "rule": "violation", "K": 12}
     c = a4.config(n4, cell, 5, None)
     d = c.to_dict()
-    assert d["connectivity"] == "adaptive" and d["effort_kind"] == "steps" and d["step_units"] == "plan"
+    assert d["connectivity"] == "adaptive" and d["effort_kind"] == "steps" and d["step_units"] == "normalized"
     assert d["grid"] == "0.02,0.05,0.1,0.2,0.3,0.5,0.8" and d["grid_unit"] == "sigma_H" and d["start"] == "star"
     assert d["ring_order"] == "lex" and d["sector_source"] == "ga" and d["seed_ga"] is not None
-    assert a4.config(n4, cell, 5, None, step_units="normalized").run_id != c.run_id
+    # S8b: normalized is the default and is hashed explicitly (a config written with it hashes the same)
+    assert a4.config(n4, cell, 5, None, step_units="normalized").run_id == c.run_id
+    assert a4.config(n4, cell, 5, None, step_units="plan").run_id != c.run_id
+    from gsp.store.ids import run_id as _rid
+    assert _rid(c.to_dict()) == c.run_id and "step_units" in c.to_dict()
+    with pytest.raises(ValueError):
+        a4.config(n4, cell, 5, None, step_units="raw")
     with pytest.raises(ValueError):
         a4.config(n4, dict(cell, connectivity="ring"), 5, None)
     with pytest.raises(ValueError):
         a4.config(n4, cell, 5, None, restart=1)
     e = a6.config(n4, None, 5, None, lam=0.005).to_dict()
-    assert e["start"] == "hadamard" and e["lam"] == 0.005 and e["K"] is None
+    assert e["start"] == "hadamard" and e["lam"] == 0.005 and e["K"] is None and e["step_units"] == "normalized"
     with pytest.raises(ValueError):
         a6.config(n4, None, 5, None)
 
@@ -274,7 +280,12 @@ def test_planner_makes_a4_a6_runnable_with_a_cap():
     a4 = [s for s in out if s["arm"] == "A4"]
     assert len(a4) == 4 and all(s["cell"]["connectivity"] == "adaptive" for s in a4)   # K6, K8, K12, objective K12
     assert all(s["kw"].get("ring_order") == "lex" for s in a4)
+    assert all(s["kw"].get("step_units") == "normalized" for s in out)          # from the envelope entries (S8b)
     assert len([s for s in out if s["arm"] == "A6"]) == 1 and all(s["effort"] == 3 for s in out)
+    from gsp.arms.base import make_arm
+    from gsp.instances.instance import load_instance
+    inst = load_instance(a4[0]["inst_id"])
+    assert make_arm("A4").config(inst, a4[0]["cell"], 3, None, **a4[0]["kw"]).extra("step_units") == "normalized"
 
 
 def test_resources_series():
@@ -319,11 +330,46 @@ def test_d1_spec_selects_the_a4_sweep_trajectory():
     import pandas as pd
     from gsp.stats.d1 import _match, d1_spec
     spec = d1_spec(a4_cap={4: 9})["A4"]
-    assert spec["connectivity"] == "adaptive" and spec["step_units"] == "plan" and spec["ring_order"] == "lex"
+    assert spec["connectivity"] == "adaptive" and spec["step_units"] == "normalized" and spec["ring_order"] == "lex"
     base = {"arm": "A4", "status": "done", "rule": "violation", "K": 12, "connectivity": "adaptive",
             "sector_source": "ga", "ring_order": "lex", "N": 4}
-    reg = pd.DataFrame([dict(base, effort=9, step_units="plan", run_id="a"),
-                        dict(base, effort=5, step_units="plan", run_id="b"),
-                        dict(base, effort=9, step_units="normalized", run_id="c")])
+    reg = pd.DataFrame([dict(base, effort=9, step_units="normalized", run_id="a"),
+                        dict(base, effort=5, step_units="normalized", run_id="b"),
+                        dict(base, effort=9, step_units="plan", run_id="c")])
     assert _match(reg, "A4", spec)["run_id"].tolist() == ["a"]
     assert sorted(_match(reg, "A4", d1_spec()["A4"])["run_id"]) == ["a", "b"]
+    assert _match(reg, "A4", d1_spec(a4_cap={4: 9}, db_step_units="plan")["A4"])["run_id"].tolist() == ["c"]
+
+
+def test_leakage_fields():
+    from gsp.arms.dbqite import leakage_fields
+    p = np.zeros(16)
+    p[[1, 5, 9]] = [0.5, 0.3, 0.2 + 3e-15]
+    p[2] = 1e-30
+    f = leakage_fields(p, [1, 5, 9])
+    assert abs(f["norm_err"] - (3e-15 + 1e-30)) <= 3e-16 and f["out_mass"] == 1e-30
+    assert abs(f["leak_raw"] - (-3e-15)) <= 3e-16                 # 1 - p_sector: the norm drift, negative here
+    assert abs(f["leak_rel"] - 1e-30) <= 1e-44                    # norm-free
+    assert set(leakage_fields(p)) == {"norm", "norm_err"}         # A6: no sector
+
+
+def test_units_default_and_config_without_units():
+    from gsp.arms.dbqite import _units
+    from gsp.arms.base import RunConfig
+    assert db.DEFAULT_STEP_UNITS == "normalized"
+    cfg = RunConfig(arm="A4", encoding="confined", inst_id="x", effort_kind="steps", effort=1)
+    with pytest.raises(ValueError):
+        _units(cfg)                                                # never defaulted from a stored config
+
+
+def test_aggregate_leakage_check_is_norm_free_for_db_arms():
+    """S8b: a DB-QITE run whose 1 - p_sector is pure norm drift (5e-12) is not a leakage anomaly; real off-sector mass is.
+    A1 keeps the raw check."""
+    from gsp.metrics.aggregate import leakage_check
+    assert leakage_check("A4", 1 - 5e-12, 1.0, 1e-30)[2] is False        # drift only, the per-step mass is ~0
+    assert leakage_check("A4", 1.0, 1.0, 3e-12)[2] is True                # real off-sector mass
+    assert leakage_check("A4", 1 - 5e-12, 1 - 5e-12, None)[2] is False    # no per-step fields: (norm - p_sector)/norm
+    assert leakage_check("A4", 1 - 5e-12, 1.0, None)[2] is True
+    assert leakage_check("A1", 1 - 5e-12, 1.0, 1e-30)[2] is True          # A1 / A2c: 1 - p_sector as before
+    raw, rel, _ = leakage_check("A4", 1 - 5e-12, 1 - 2e-12)
+    assert abs(raw - 5e-12) < 1e-15 and abs(rel - 3e-12) < 1e-15

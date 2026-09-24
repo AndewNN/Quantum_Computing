@@ -60,6 +60,9 @@ def test_full_grid_cells(full_grid):
     assert pc["penalty|N10"]["A6"]["total"] == 90 and "A3d" not in pc["penalty|N8"]
     a4 = [s for s in full_grid if s["arm"] == "A4"]
     assert {s["cell"]["connectivity"] for s in a4} == {"adaptive"}
+    # S8b: the DB-QITE arms are planned with the corrected step convention, named explicitly (hashed into the run_id)
+    assert {s["kw"].get("step_units") for s in full_grid if s["arm"] in ("A4", "A6")} == {"normalized"}
+    assert all("step_units" not in s["kw"] for s in full_grid if s["arm"] not in ("A4", "A6"))
 
 
 def test_plan_runids_reproduce_stored_s4_runs():

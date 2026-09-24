@@ -1,6 +1,6 @@
 """S8 evidence for arms A4 / A6 (DB-QITE) and Rule C1 -> results/tables/s8_dbqite.json, reports/dbqite.md.
 
-    ~/anaconda3/envs/gsp/bin/python scripts/s8_dbqite_checks.py example | c1op | c1state | smoke | time | report
+    ~/anaconda3/envs/gsp/bin/python scripts/s8_dbqite_checks.py example | c1op | c1state | smoke | time | backfill | report
 
   example  example_dbqite.py's 3-qubit instance, 7 steps: the GPU circuit and the numpy reflection-formula engine vs the
            script (its own compiled_step replayed with its chosen s): energies and the chosen s per step.
@@ -14,6 +14,9 @@
   smoke    stored runs (production store): A4 N04e004q1.5 / N07e000q1.5 (ring-row K12 cell, adaptive) and A6
            N04e004q1.5 / N10e000q1.5 (lam 0.005), 5 steps, step_units plan (PLAN §1.5) and normalized (O-13).
   time     stored runs A4 N07e000q1.5 and A6 N10e000q1.5, plan units, 8 steps: per-step wall clock for the 3^k model.
+  backfill (S8b) leakage.npz for every stored A4 / A6 run that lacks the per-step leakage fields (replay; files added).
+c1op / c1state take --units (default: the arms' default, "normalized" since S8b); S8 ran them with "plan", kept in the
+JSON as c1op_plan / c1state_plan.
 One GPU process at a time: every command that touches the GPU refuses to start while another holds it.
 """
 
@@ -112,7 +115,7 @@ def cmd_example(args):
 
 
 # --- C1 operator level --------------------------------------------------------------------------------------------------
-def a4_trajectory(iid: str, cell: dict, steps: int, units: str = "plan"):
+def a4_trajectory(iid: str, cell: dict, steps: int, units: str = "normalized"):
     """(DBCircuit, sector view, instance, DBResult, states psi_0..psi_T) of A4 on the GPU (not stored)."""
     from gsp.arms.dbqite import confined_db_circuit, run_dbqite
     from gsp.circuits import dbqite as db
@@ -132,7 +135,7 @@ def cmd_c1op(args):
             continue
         for j, iid in enumerate(cell_insts(cell, args.n_inst)):
             t = time.perf_counter()
-            C, sv, inst, res, states = a4_trajectory(iid, cell, args.steps)
+            C, sv, inst, res, states = a4_trajectory(iid, cell, args.steps, args.units)
             d = C.ham.diagonal()
             for k, psi in enumerate(states):
                 g = a4_generator_check(psi, d, sv.idx, dense=True)
@@ -157,11 +160,11 @@ def cmd_c1op(args):
            "max_rel": float(df["rel"].max()), "all_pass": bool(tab["passes"].all()), "tol": OPERATOR_TOL,
            "step_operator_max_leak": float(so["leakage"].max()) if len(so) else None,
            "step_operator_max_block_err": float(so["block_err"].max()) if len(so) else None,
-           "n_inst": args.n_inst, "steps": args.steps}
+           "n_inst": args.n_inst, "steps": args.steps, "units": args.units}
     log(tab.to_string(index=False))
     log(f"max rel {out['max_rel']:.2e}; step operator leak {out['step_operator_max_leak']:.2e}, block err "
         f"{out['step_operator_max_block_err']:.2e}")
-    save_section("c1op", out)
+    save_section("c1op" if args.units == "normalized" else "c1op_plan", out)
 
 
 # --- C1 state level ---------------------------------------------------------------------------------------------------
@@ -173,7 +176,7 @@ def cmd_c1state(args):
     for cell in ring_cells():
         iid = cell_insts(cell, 1)[0]
         t = time.perf_counter()
-        C, sv, inst, res, states = a4_trajectory(iid, cell, args.steps)
+        C, sv, inst, res, states = a4_trajectory(iid, cell, args.steps, args.units)
         lk = [leakage(psi, sv.idx) for psi in states]
         leak = [r["leak"] for r in lk[1:]]
         mc = C.counts(args.steps)["mc_gates"][1:]
@@ -181,7 +184,9 @@ def cmd_c1state(args):
         st = a4_state_level(inst, circ, leak, mc, restart_seed(draw_of(iid), 0))
         st.update({"cell": cell_tag(cell), "axis": cell["axis"], "N": int(cell["N"]), "n": C.n, "K": int(cell["K"]),
                    "inst_id": iid, "out_mass_k": [r["out_mass"] for r in lk[1:]],
-                   "norm_err_k": [r["norm_err"] for r in lk[1:]], "wall_s": time.perf_counter() - t})
+                   "norm_err_k": [r["norm_err"] for r in lk[1:]],
+                   "leak_rel_k": [r["out_mass"] / (1.0 + r["norm_err"]) for r in lk[1:]],
+                   "wall_s": time.perf_counter() - t})
         rows.append(st)
         log(f"{cell_tag(cell)} {iid}: leak {['%.1e' % v for v in leak]} eps {['%.1e' % v for v in st['eps_num_k']]} "
             f"pass {st['passes']} ratio {st['max_ratio']:.2f} exp A4 {st['growth_a4']['exponent']:.2f} "
@@ -195,9 +200,12 @@ def cmd_c1state(args):
     E1 = [v for r in rows for v in r["eps_num_k"]]
     out = {"rows": rows, "all_pass": all(r["passes"] for r in rows), "max_ratio": max(r["max_ratio"] for r in rows),
            "pooled_growth_a4": growth_exponent(D4, L4), "pooled_growth_a1": growth_exponent(D1, E1),
-           "steps": args.steps}
+           "steps": args.steps, "units": args.units,
+           # O-14's recommended alternative: the norm-free off-sector mass against the operator-level floor 1e-13
+           "leak_rel_max": max(max(r["leak_rel_k"]) for r in rows),
+           "leak_rel_passes_1e-13": all(max(r["leak_rel_k"]) <= 1e-13 for r in rows)}
     log(json.dumps({k: v for k, v in out.items() if k != "rows"}))
-    save_section("c1state", out)
+    save_section("c1state" if args.units == "normalized" else "c1state_plan", out)
 
 
 # --- smoke / time ---------------------------------------------------------------------------------------------------------
@@ -250,6 +258,28 @@ def cmd_time(args):
     save_section("time", {"rows": rows})
 
 
+def cmd_backfill(args):
+    """S8b: leakage.npz (per-step norm, in_mass, out_mass, leak_raw, leak_rel) by replay for stored A4 / A6 runs whose
+    trajectory predates the fields. Files are added only; trajectory.npz / run.json are never touched."""
+    from gsp.arms.dbqite import backfill_leakage, db_leakage
+    from gsp.store.index import load_registry
+    from gsp.store.paths import runs_dir
+    reg = load_registry(rebuild=True)
+    rows = []
+    for r in reg[reg["arm"].isin(["A4", "A6"]) & (reg["status"] == "done")].to_dict("records"):
+        d = runs_dir() / r["run_dir"]
+        have = db_leakage(d)
+        if have is not None:
+            rows.append({"run_id": r["run_id"], "arm": r["arm"], "status": f"has ({have['source']})"})
+            continue
+        t = time.perf_counter()
+        out = backfill_leakage(d)
+        rows.append({"run_id": r["run_id"], "arm": r["arm"], "inst_id": r["inst_id"], "effort": int(r["effort"]),
+                     "step_units": r.get("step_units"), **out, "wall_s": time.perf_counter() - t})
+        log(json.dumps(rows[-1]))
+    save_section("backfill", {"rows": rows})
+
+
 def cmd_report(args):
     from gsp.arms.dbqite_report import write
     print(f"written to {write(load_out())}", file=sys.stderr)
@@ -257,7 +287,9 @@ def cmd_report(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["example", "c1op", "c1state", "smoke", "time", "report"])
+    ap.add_argument("cmd", choices=["example", "c1op", "c1state", "smoke", "time", "backfill", "report"])
+    ap.add_argument("--units", choices=["normalized", "plan"], default="normalized",
+                    help="c1op / c1state: the DB-QITE step convention (S8 ran plan; S8b's default is normalized)")
     ap.add_argument("--steps", type=int, default=None, help="A4 steps (c1op / c1state: 5; time: 8)")
     ap.add_argument("--n-inst", type=int, default=3, help="c1op: instances per cell")
     args = ap.parse_args(argv)
@@ -270,7 +302,7 @@ def main(argv=None):
             log(f"GPU busy (PIDs {busy}); one GPU process at a time")
             return 2
     {"example": cmd_example, "c1op": cmd_c1op, "c1state": cmd_c1state, "smoke": cmd_smoke, "time": cmd_time,
-     "report": cmd_report}[args.cmd](args)
+     "backfill": cmd_backfill, "report": cmd_report}[args.cmd](args)
     return 0
 
 

@@ -13,7 +13,13 @@ Row = the registry row (config, run.json metrics `metric_*`, timings `time_*`, d
 Checks (tolerances are engineering choices, S5): the replayed final state vs final_state.npy (<= 1e-10); the state
 metrics vs run.json's metric_* (<= 1e-10); the trajectory's last row vs run.json (<= 1e-12); validate_run_dir; the
 conv g2q identity; the sample's tail probability under the exact best-of-S distribution (>= 1e-4) and the binomial
-z of its feasible count (|z| <= 5); confined arms: 1 - p_sector <= 1e-12; the postrun step's status.
+z of its feasible count (|z| <= 5); confined arms: 1 - p_sector <= 1e-12 (A1 / A2c), and for the DB-QITE arms the
+norm-free off-sector mass out_mass / norm <= 1e-12 (the per-step maximum from the trajectory / leakage.npz, else the final
+state's (norm - p_sector) / norm) (S8b: U_k repeats identical gates 3^k times, so the norm
+drift inside 1 - p_sector grows linearly and is not leakage, PLAN §4.1 O-14); the postrun step's status.
+Leakage columns (S8b): chk_leak_raw = 1 - p_sector and chk_leak_rel = (norm - p_sector) / norm of the final state (every
+confined run); for A4 / A6 also the per-step maxima leak_raw_abs_max / leak_rel_max / norm_err_abs_max from the
+trajectory or the replayed sidecar (`arms.dbqite.db_leakage`).
 Incremental: rows whose (run_id, finished_at, postrun file state, METRICS_VERSION) key is unchanged are reused.
 """
 
@@ -33,7 +39,7 @@ from .preprocessing import preprocessing
 from .resources import resources
 from .state import METRIC_KEYS
 
-METRICS_VERSION = 1
+METRICS_VERSION = 2                 # S8b: leakage columns, the DB-QITE leakage check
 STATE_KEYS = METRIC_KEYS + ("p_sector", "norm")
 TOL_REPLAY = 1e-10
 TOL_STATE_VS_RECORD = 1e-10
@@ -41,6 +47,7 @@ TOL_TRAJ_VS_RECORD = 1e-12
 TOL_SAMPLE_TAIL = 1e-4
 TOL_FEAS_Z = 5.0
 TOL_LEAK = 1e-12
+DB_ARMS = ("A4", "A6")
 
 
 def metrics_path(root=None) -> Path:
@@ -58,6 +65,20 @@ def _clean(v):
     if isinstance(v, float) and np.isnan(v):
         return None
     return v
+
+
+def leakage_check(arm: str, p_sector: float, norm=None, leak_rel_max=None) -> tuple:
+    """(raw, rel, flagged) of a confined run's final state. raw = 1 - p_sector (A1 / A2c are flagged on it); rel =
+    (norm - p_sector) / norm. The DB-QITE arms (S8b) are flagged on the norm-free off-sector mass: the per-step directly
+    summed out_mass / norm when logged (resolves ~1e-30), else rel (resolves ~2e-16)."""
+    raw = 1.0 - float(p_sector)
+    nrm = float(norm) if norm is not None and np.isfinite(norm) and norm > 0 else 1.0
+    rel = (nrm - float(p_sector)) / nrm
+    if arm in DB_ARMS:
+        check = float(leak_rel_max) if leak_rel_max is not None and np.isfinite(leak_rel_max) else rel
+    else:
+        check = raw
+    return raw, rel, bool(check > TOL_LEAK)
 
 
 def run_row(reg_row: dict, root=None, inputs_root=None) -> dict:
@@ -85,6 +106,16 @@ def run_row(reg_row: dict, root=None, inputs_root=None) -> dict:
     if row.get("chk_conv_g2q") is False:
         anomalies.append("conv_g2q")
     row.update(preprocessing(rec, iroot))
+    if rec.get("arm") in DB_ARMS:
+        from ..arms.dbqite import db_leakage
+        lk = db_leakage(d)
+        row["leak_source"] = None if lk is None else lk["source"]
+        if lk is not None:
+            if "leak_raw" in lk:
+                row["leak_raw_abs_max"] = float(np.nanmax(np.abs(lk["leak_raw"])))
+                row["leak_rel_max"] = float(np.nanmax(lk["leak_rel"]))
+                row["out_mass_max"] = float(np.nanmax(lk["out_mass"]))
+            row["norm_err_abs_max"] = float(np.nanmax(np.abs(lk["norm_err"])))
     # the trajectory's last row against run.json
     dl = [abs(float(tr[k][-1]) - float(rec[f"metric_{k}"])) for k in METRIC_KEYS
           if k in tr and rec.get(f"metric_{k}") is not None and np.isfinite(tr[k][-1])]
@@ -118,8 +149,12 @@ def run_row(reg_row: dict, root=None, inputs_root=None) -> dict:
         row["chk_state_vs_record"] = max(ds) if ds else None
         if ds and max(ds) > TOL_STATE_VS_RECORD:
             anomalies.append("state_vs_record")
-        if rec.get("encoding") == "confined" and sm.get("p_sector") is not None and 1.0 - sm["p_sector"] > TOL_LEAK:
-            anomalies.append("leakage")
+        if rec.get("encoding") == "confined" and sm.get("p_sector") is not None:
+            raw, rel, flagged = leakage_check(rec.get("arm"), float(sm["p_sector"]), sm.get("norm"),
+                                              row.get("leak_rel_max"))
+            row["chk_leak_raw"], row["chk_leak_rel"] = raw, rel
+            if flagged:
+                anomalies.append("leakage")
     if row.get("replay_max_abs") is not None and row["replay_max_abs"] > TOL_REPLAY:
         anomalies.append("replay")
     if row.get("sample_tail_p") is not None and row["sample_tail_p"] < TOL_SAMPLE_TAIL:

@@ -96,9 +96,17 @@ def test_arm_run_end_to_end(tmp_path):
         assert abs(r.record["metric_energy"] - tr["E_loop"][-1]) <= 1e-12
         assert np.all(np.isfinite(tr["s_k"][1:])) and np.isnan(tr["s_k"][0])
     assert r4.record["metric_leak_max"] <= 1e-12
+    for k in ("norm", "norm_err", "in_mass", "out_mass", "leak_raw", "leak_rel"):     # S8b: per step, both estimators
+        assert r4.trajectory[k].shape == (3,)
+    assert np.array_equal(r4.trajectory["in_mass"], r4.trajectory["p_sector"])
+    assert np.max(np.abs(r4.trajectory["leak_raw"] - (r4.trajectory["out_mass"] - r4.trajectory["norm_err"]))) <= 3e-16
+    assert "norm" in r6.trajectory and "out_mass" not in r6.trajectory
+    assert r4.record["step_units"] == "normalized" == r6.record["step_units"]
     rows = [run_row(row, tmp_path, None) for row in build_index(tmp_path).to_dict("records")]
     assert [r["anomalies"] for r in rows] == ["", ""]
     assert all(r["chk_conv_g2q"] for r in rows)
+    a4row = [r for r in rows if r["arm"] == "A4"][0]
+    assert a4row["leak_source"] == "trajectory" and a4row["leak_rel_max"] <= 1e-28 and "chk_leak_raw" in a4row
     again = a4.run("N04e004q1.5", {"connectivity": "adaptive", "rule": "violation", "K": 12}, 2, runs_root=tmp_path)
     assert again.skipped
 
@@ -134,3 +142,25 @@ def test_selfcheck_detects_a_perturbation(tmp_path):
     p.write_text(json.dumps(fx))
     res = compare(p, only_circuits=True)
     assert [r["pass"] for r in res["rows"]] == [False, True] and not res["passes"]
+
+
+def test_backfill_leakage_replays_an_s8_style_run(tmp_path):
+    """A run stored without the S8b fields (simulated by dropping them) gets leakage.npz by replay; the replay equals the
+    stored p_sector / out_mass / norm_err exactly and the trajectory is not touched."""
+    from gsp.arms.base import make_arm
+    from gsp.arms.dbqite import backfill_leakage, db_leakage
+    from gsp.store.io import load_npz, save_npz
+    r = make_arm("A4").run("N04e004q1.5", {"connectivity": "adaptive", "rule": "violation", "K": 12}, 3,
+                           runs_root=tmp_path)
+    tr = load_npz(r.path / "trajectory.npz")
+    old = {k: v for k, v in tr.items() if k not in ("norm", "in_mass", "leak_raw", "leak_rel")}
+    save_npz(r.path / "trajectory.npz", old)                        # an S8 record: p_sector, out_mass, norm_err only
+    before = (r.path / "trajectory.npz").read_bytes()
+    assert db_leakage(r.path) is None
+    out = backfill_leakage(r.path)
+    assert out["status"] == "written" and out["replay_in_mass_max_abs"] == 0.0
+    assert out["replay_out_mass_max_abs"] == 0.0 and out["replay_norm_err_max_abs"] == 0.0
+    lk = db_leakage(r.path)
+    assert lk["source"] == "replay" and np.array_equal(lk["leak_rel"], tr["leak_rel"])
+    assert (r.path / "trajectory.npz").read_bytes() == before
+    assert backfill_leakage(r.path)["status"] == "exists"
