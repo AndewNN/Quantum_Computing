@@ -209,3 +209,99 @@ def growth_exponent(D, leak, level: float = 0.95) -> dict:
         cls = "ambiguous"
     return {"exponent": float(r.slope), "lo": float(lo), "hi": float(hi), "se": float(r.stderr),
             "intercept": float(r.intercept), "n": int(x.size), "dropped": int((~ok).sum()), "class": cls}
+
+
+# --- S8: A4 (confined DB-QITE) at both levels ---------------------------------------------------------------------
+# Operator level (PLAN §1.7, n <= 12): the dense generator W_k = [rho_k, H] of step k, rho_k = |psi_k><psi_k| from the
+# compiled circuit's state, restricted to the sector: every element with a row or a column outside the kept strings,
+# relative to ||W_k||_2. For a normalized pure state ||[rho, H]||_2 = sqrt(Var_psi(H)) (W = sigma (|psi><psi_perp| -
+# h.c.)); the function also returns the numerically computed norm at n <= 8 as a check. The threshold is 1e-13.
+# `a4_step_operator` (extra, small n): the compiled step V = e^{i r_H H} U_k P U_k^dagger e^{-i r_H H} as a gate list on
+# every kept basis string (npsim) against the exact reflection formula e^{i r_H H} (I + (e^{i r_rho} - 1) rho_k)
+# e^{-i r_H H}: off-sector amplitudes and the K x K block error.
+# State level: `a4_state_level` = leak_k = 1 - p_sector(psi_k) along the A4 trajectory against 10 x eps_num(n, D_k) from
+# `eps_num_curve` at the A1 depth whose multi-controlled gate count matches U_k's (`matched_layers`), plus the growth
+# exponent of |leak| vs D on both sides.
+OPERATOR_TOL = 1e-13
+
+
+def a4_generator_check(psi, diag, sector_idx, dense: bool = True) -> dict:
+    """Off-sector part of W = [rho, H] for one state (classical order). dense=True builds the 2^n x 2^n matrix."""
+    psi = np.asarray(psi, dtype=np.complex128)
+    d = np.asarray(diag, dtype=np.float64)
+    nrm = float(np.vdot(psi, psi).real)
+    E = float((np.abs(psi) ** 2) @ d) / nrm
+    var = float((np.abs(psi) ** 2) @ (d - E) ** 2) / nrm
+    w_norm = float(np.sqrt(max(var, 0.0))) * nrm
+    mask = np.zeros(psi.size, dtype=bool)
+    mask[np.asarray(sector_idx, dtype=np.int64)] = True
+    if dense:
+        W = np.outer(psi, psi.conj()) * (d[None, :] - d[:, None])      # (rho H - H rho)_{xy} = psi_x psi_y^* (d_y - d_x)
+        off = max(float(np.abs(W[~mask, :]).max(initial=0.0)), float(np.abs(W[:, ~mask]).max(initial=0.0)))
+        w_max = float(np.abs(W).max())
+        w_norm_num = float(np.linalg.norm(W, 2)) if psi.size <= 256 else None
+        del W
+    else:          # the same maximum without the matrix (|W_xy| = |W_yx|: off-sector rows suffice), row blocks
+        a = np.abs(psi)
+        sub = np.flatnonzero(~mask)
+        off = 0.0
+        for i in range(0, sub.size, 256):
+            r = sub[i:i + 256]
+            off = max(off, float((a[r][:, None] * a[None, :] * np.abs(d[None, :] - d[r][:, None])).max()))
+        w_max, w_norm_num = None, None
+    return {"off_max": off, "w_norm": w_norm, "rel": off / w_norm if w_norm > 0 else (0.0 if off == 0 else np.inf),
+            "w_max": w_max, "w_norm_numeric": w_norm_num, "variance": var, "norm_err": nrm - 1.0,
+            "out_amp_max": float(np.abs(psi[~mask]).max(initial=0.0)), "dense": dense}
+
+
+def a4_step_operator(C, s_prefix, s_next: float, sector_idx) -> dict:
+    """The compiled step from psi_k (k = len(s_prefix)) with step s_next, on every kept basis string (npsim)."""
+    from ..circuits import dbqite as db
+    from ..compile import decompose as dc
+    from ..compile import npsim
+    from ..compile.decompose import Angle, Gate
+    rH, rr = db.r_pair(s_next, C.units, C.sigma)
+    Uk = C.gates(list(s_prefix))
+
+    def cost(a):
+        return [g if g.angle is None or g.angle.pidx < 0 else Gate(g.name, g.qubits, Angle(g.angle.coef * a))
+                for g in C.cost]
+
+    step = cost(rH) + dc.inverse(Uk) + dc.mcphase_native(C.n, Angle(rr)) + Uk + cost(-rH)
+    idx = np.asarray(sector_idx, dtype=np.int64)
+    V = npsim.flat(npsim.apply(step, npsim.columns(C.n, idx)))
+    psi = C.formula_state(list(s_prefix))
+    d = C.ham.diagonal()
+    cols = np.zeros((1 << C.n, idx.size), dtype=np.complex128)
+    cols[idx, np.arange(idx.size)] = 1.0
+    ph = np.exp(-1j * rH * d)[:, None]
+    phi = ph * cols
+    phi = phi + (np.exp(1j * rr) - 1.0) * np.outer(psi, psi.conj() @ phi)
+    Vex = np.conj(ph) * phi
+    mask = np.ones(1 << C.n, dtype=bool)
+    mask[idx] = False
+    return {"k": len(s_prefix), "leakage": float(np.abs(V[mask]).max(initial=0.0)),
+            "block_err": float(np.abs(V[idx] - Vex[idx]).max()),
+            "exact_leakage": float(np.abs(Vex[mask]).max(initial=0.0)), "gates": len(step)}
+
+
+def matched_layers(mc_target: int, mc_prep: int, mc_layer: int) -> int:
+    """The A1 depth L whose multi-controlled gate count mc_prep + L mc_layer first reaches mc_target (>= 1)."""
+    return max(1, int(np.ceil((int(mc_target) - int(mc_prep)) / max(1, int(mc_layer)))))
+
+
+def a4_state_level(inst, circ, leak_k, mc_k, seed: int, engine: str = "cudaq", n_circuits: int = N_CALIB_CIRCUITS,
+                   factor: float = STATE_FACTOR) -> dict:
+    """Rule C1 state level along one A4 trajectory. leak_k / mc_k: k = 1..T (1 - p_sector of psi_k and the
+    multi-controlled gates of U_k). eps_num at the matched A1 ring depths (same sector, `eps_num_curve`)."""
+    mc_prep = mc_gate_count(pr.prep_gates(circ))
+    mc_layer = mc_gate_count(pr.layer_gates(circ, 0))
+    Ls = [matched_layers(m, mc_prep, mc_layer) for m in mc_k]
+    curve = eps_num_curve(inst, circ, Ls, seed, n_circuits=n_circuits, engine=engine)
+    eps = [c["eps_num"] for c in curve]
+    rule = state_level(leak_k, eps, factor)
+    D_a1 = [c["mc_gates"] for c in curve]
+    return {"mc_k": [int(m) for m in mc_k], "L_matched": Ls, "mc_a1": D_a1, "leak_k": [float(v) for v in leak_k],
+            "eps_num_k": eps, "eps_out_mass_k": [c["max_out_mass"] for c in curve], **rule,
+            "growth_a4": growth_exponent(mc_k, leak_k), "growth_a1": growth_exponent(D_a1, eps),
+            "mc_prep": mc_prep, "mc_layer": mc_layer, "n_circuits": n_circuits, "engine": engine}

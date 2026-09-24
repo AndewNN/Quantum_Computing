@@ -35,13 +35,14 @@ def test_full_grid_counts_per_arm(full_grid):
         "A0": 14850, "A1": 27045, "A2p": 12600, "A2c": 36060, "A3": 1890, "A4": 1533, "A6": 630, "A3d": 1080}
     assert c["A0"]["by_tag"] == {"gate_matched": 5400, "main": 9450}
     assert c["A3d"]["tier"] == "optional"
-    # what is runnable today (S7): A1 / A2c; the penalty arms (A3 / A3d registered in S7) wait for lambda*, A4 / A6
-    # for S8 (+ S9)
+    # what is runnable today (S8): A1 / A2c; the penalty arms wait for lambda*, A4 / A6 (registered in S8) for the
+    # recursion cap (S9)
     assert {a: v["runnable"] for a, v in c.items()} == {
         "A0": 0, "A1": 27045, "A2p": 0, "A2c": 36060, "A3": 0, "A4": 0, "A6": 0, "A3d": 0}
     assert c["A3"]["placeholder_reasons"] == {"lambda_star": 1890}
     assert c["A3d"]["placeholder_reasons"] == {"lambda_star": 1080}
-    assert c["A4"]["placeholder_reasons"] == {"arm_not_registered,recursion_cap": 1533}
+    assert c["A4"]["placeholder_reasons"] == {"recursion_cap": 1533}
+    assert c["A6"]["placeholder_reasons"] == {"lambda_star,recursion_cap": 630}
     assert c["A0"]["placeholder_reasons"] == {"lambda_star": 9450, "lambda_star,gate_matched_depth": 5400}
 
 

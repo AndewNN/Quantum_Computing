@@ -43,7 +43,8 @@ from functools import lru_cache
 import numpy as np
 
 ROTATIONS = ("rx", "ry", "rz")
-NATIVE_MC = ("mcrx", "mcry")
+PHASES = ("r1",)                 # r1(a) = diag(1, e^{ia}) (CUDA-Q's r1); S8: in the MC phase's (ii) / (iii) lists
+NATIVE_MC = ("mcrx", "mcry", "mcr1")   # mcr1: native multi-controlled phase (S8, DB-QITE's e^{ir|0..0><0..0|})
 SIM_ONLY = ("crz",)              # controlled Rz: only in the simulation form of the cost layer (S4, cost.py)
 CLIFFORD_1Q = ("x", "h", "s", "sdg")
 
@@ -77,7 +78,7 @@ class Gate:
             return self
         if self.name in ("s", "sdg", "t", "tdg"):
             return Gate({"s": "sdg", "sdg": "s", "t": "tdg", "tdg": "t"}[self.name], self.qubits)
-        if self.name in ROTATIONS or self.name in NATIVE_MC or self.name in SIM_ONLY:
+        if self.name in ROTATIONS or self.name in PHASES or self.name in NATIVE_MC or self.name in SIM_ONLY:
             return Gate(self.name, self.qubits, self.angle.scaled(-1.0))
         raise ValueError(self.name)
 
@@ -226,6 +227,65 @@ def transition_ii(n: int, xmask, ladder, k0: int, kind: str, angle: Angle) -> li
     return W + flips + ch + cr + inverse(ch) + flips + inverse(W)
 
 
+# --- S8: the multi-controlled phase e^{i a |0...0><0...0|} of DB-QITE (PLAN §1.5) ---------------------------
+# The DB-QITE step needs e^{i r rho_k} = U_k e^{i r |0..0><0..0|} U_k^dagger: a phase on |0...0> of all n system
+# qubits, i.e. X on every qubit, the (n-1)-controlled phase C^{n-1}(r1(a)) on qubit n - 1 (closed controls
+# 0..n-2), X on every qubit (an open-controlled phase gate). Three forms of the same unitary:
+#   mcphase_native   the simulated gate (one native mcr1; the kernel applies r1.ctrl on the qubit register);
+#   mcphase_ii       the device count (ii) by S3's Eq. 4.10 rules with d = 1 (no W ladder): V18's chain of n - 2
+#                    relative-phase Toffolis on n - 2 clean ancillas (computed and uncomputed) and a controlled
+#                    phase CP(a) = CX r1(-a/2)_t CX r1(a/2)_t r1(a/2)_c (2 CNOTs): 6(n - 2) + 2 CNOTs;
+#   mcphase_iii      the ancilla-free (iii) list. A phase gate is U(2), not SU(2), so Vale et al.'s linear
+#                    C^k(SU(2)) does not apply to it directly; the exact ancilla-free route used here peels one
+#                    control at a time: C^m(r1(a)) on (c_1..c_m -> t) = C^m(Rz(a)) on t times C^{m-1}(r1(a/2)) on
+#                    (c_1..c_{m-1} -> c_m) (on |1..1>|t> the phases are e^{-+ia/2} e^{ia/2}), down to r1(a / 2^{n-1})
+#                    on qubit 0: sum_{j=1}^{n-1} C_Vale(j) CNOTs (quadratic in n; STATUS S8 flags it for Sensei).
+def mcphase_native(n: int, angle: Angle) -> list:
+    """X on every qubit, C^{n-1}(r1(angle)) on qubit n - 1 (controls 0..n-2), X on every qubit (n >= 2)."""
+    if n < 2:
+        raise ValueError("the multi-controlled phase needs n >= 2")
+    flips = [_g("x", k) for k in range(n)]
+    return flips + [Gate("mcr1", tuple(range(n)), angle)] + flips
+
+
+def mcphase_ii(n: int, angle: Angle) -> list:
+    """(ii): the open-controlled phase on n system qubits with V18's ancilla chain (ancillas n .. 2n - 3)."""
+    if n < 2:
+        raise ValueError("the multi-controlled phase needs n >= 2")
+    t = n - 1
+    ctl = list(range(n - 1))
+    flips = [_g("x", k) for k in range(n)]
+    half = angle.scaled(0.5)
+    if n == 2:
+        chain, last = [], ctl[0]
+    else:
+        anc = list(range(n, 2 * n - 2))
+        chain = rtof(ctl[0], ctl[1], anc[0])
+        for j in range(2, len(ctl)):
+            chain += rtof(anc[j - 2], ctl[j], anc[j - 1])
+        last = anc[-1]
+    cp = [_g("cx", last, t), _g("r1", t, angle=half.scaled(-1.0)), _g("cx", last, t), _g("r1", t, angle=half),
+          _g("r1", last, angle=half)]
+    return flips + chain + cp + inverse(chain) + flips
+
+
+def mcphase_iii(n: int, angle: Angle) -> list:
+    """(iii): the ancilla-free peeling construction (block comment above), Vale's C^j(Rz) at every level."""
+    if n < 2:
+        raise ValueError("the multi-controlled phase needs n >= 2")
+    flips = [_g("x", k) for k in range(n)]
+    body = []
+    for j in range(n - 1, 0, -1):
+        body += mc_su2(list(range(j)), j, "rz", angle.scaled(0.5 ** (n - 1 - j)))
+    body.append(_g("r1", 0, angle=angle.scaled(0.5 ** (n - 1))))
+    return flips + body + flips
+
+
+def mcphase_iii_cnots(n: int) -> int:
+    """Closed form of `mcphase_iii`'s CNOT count, sum_{j=1}^{n-1} C_Vale(j) (the tests check it against the list)."""
+    return int(sum(vale_cnots(j) for j in range(1, n)))
+
+
 # --- counting helpers -------------------------------------------------------------------------------
 def cnot_count(gates) -> int:
     n_native = sum(g.name in NATIVE_MC or g.name in SIM_ONLY for g in gates)
@@ -249,7 +309,7 @@ def _rotation_t_cost(angle: Angle, t_syn: int) -> int:
 def gate_t_cost(g: Gate, t_syn: int) -> int:
     if g.name in ("t", "tdg"):
         return 1
-    if g.name in ROTATIONS:
+    if g.name in ROTATIONS or g.name in PHASES:
         return _rotation_t_cost(g.angle, t_syn)
     if g.name in NATIVE_MC:
         raise ValueError("lower native gates before counting T")

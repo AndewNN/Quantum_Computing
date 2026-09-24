@@ -272,15 +272,19 @@ def config_label(rec: dict) -> str:
     return lab
 
 
-def d1_spec(lam_star: dict | None = None, ring_order: str = "lex") -> dict:
+def d1_spec(lam_star: dict | None = None, ring_order: str = "lex", a4_cap: dict | None = None,
+            db_step_units: str = "plan") -> dict:
     """Registry filters of the runs that enter D1 (a filter value None = the key must be missing / NaN).
-    lam_star: {N: lambda*(N)} for the penalty arms (S9); None = no lambda filter (S5 exercise only)."""
+    lam_star: {N: lambda*(N)} for the penalty arms (S9); None = no lambda filter (S5 exercise only).
+    a4_cap: {N: recursion cap} (S9): A4 enters with effort = cap(N) only (S8: the smoke / timing records have other
+    efforts; one trajectory per instance); None = no effort filter. db_step_units: A4's step convention (S8, O-13)."""
     sector = dict(D1_CELL, ring_order=ring_order, sector_source="ga")
     return {"A0": {"init": "random", "_lam": lam_star},
             "A1": dict(sector, init="random"),
             "A2c": dict(sector, ramp_sign=-1),
             "A3": {"_lam": lam_star, "metric": "M1", "n_steps": 300},     # S7: the sweep config (no smoke / timing runs)
-            "A4": dict(D1_CELL, connectivity="adaptive", sector_source="ga")}
+            "A4": dict(D1_CELL, connectivity="adaptive", sector_source="ga", ring_order=ring_order,
+                       step_units=db_step_units, _effort=a4_cap)}
 
 
 def _match(df: pd.DataFrame, arm: str, flt: dict) -> pd.DataFrame:
@@ -291,6 +295,10 @@ def _match(df: pd.DataFrame, arm: str, flt: dict) -> pd.DataFrame:
         if k == "_lam":
             if v:
                 sub = sub[[bool(np.isclose(l, v.get(int(n), np.nan))) for l, n in zip(sub["lam"], sub["N"])]]
+            continue
+        if k == "_effort":
+            if v:
+                sub = sub[[int(e) == int(v.get(int(n), -1)) for e, n in zip(sub["effort"], sub["N"])]]
             continue
         if k not in sub:
             return sub.iloc[0:0]

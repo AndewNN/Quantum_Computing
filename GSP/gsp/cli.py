@@ -18,6 +18,8 @@ S4:  gsp arms smoke                   (every §1.2 cell at N = 4: A0 / A1 / A2p 
      gsp arms report [--no-write]     (reports/arms.md from the tables above and s4_legacy.json)
      gsp arms run --arm A1 --inst N04e004q1.5 --effort 5 [--K 12 --rule violation --conn ring] [--lam ...]
                                       (S7: --arm A3 | A3d --lam 0.005 [--n-steps 10] runs VarQITE)
+                                      (S8: --arm A4 --effort 5 [--K 12 --rule violation] / --arm A6 --lam 0.005
+                                       --effort 5 [--step-units plan|normalized] runs DB-QITE for 5 steps)
      (scripts/s4_legacy_checks.py: the legacy-equivalence numbers, results/tables/s4_legacy.json)
 S5:  gsp metrics finalize [--arms A0 ...] [--limit N] [--force]
                                       (GPU: samples.npz + postrun.json for the stored runs that lack them)
@@ -41,7 +43,8 @@ S6:  gsp plan [filters] [--lam-star 4=0.005 ...] [--gate-matched 4:5=45 ...] [--
      gsp merge --src DIR [--dry-run]  (fold a pulled remote results/runs shard in; scripts/remote/pull.sh)
      gsp report [--write]             (stub: runs per arm x status, metrics rows, queues; S15 builds it out)
      gsp index [--check]              (rebuild the registry; --check validates every run.json)
-Later sessions add selfcheck.
+S8:  gsp selfcheck --record [--force] | --compare [--json]   (CUDA-Q migration acceptance test, PLAN §3.5; GPU)
+     gsp arms run --arm A4 | A6 ...   (DB-QITE; scripts/s8_dbqite_checks.py: example / C1 / smoke / timing / report)
 """
 
 from __future__ import annotations
@@ -215,14 +218,17 @@ def _cmd_arms(args) -> int:
     if args.action == "run":
         from .arms.base import make_arm
         arm = make_arm(args.arm)
-        penalty = args.arm in ("A0", "A2p", "A3", "A3d")
-        cell = None if penalty else {"connectivity": args.conn, "rule": args.rule, "K": args.K}
+        penalty = args.arm in ("A0", "A2p", "A3", "A3d", "A6")
+        conn = "adaptive" if args.arm == "A4" else args.conn
+        cell = None if penalty else {"connectivity": conn, "rule": args.rule, "K": args.K}
         kw = {"lam": args.lam} if penalty else {}
         if args.arm in ("A0", "A1"):
             kw["restart"] = args.restart
         elif args.arm in ("A3", "A3d"):
             if args.n_steps is not None:
                 kw["n_steps"] = args.n_steps
+        elif args.arm in ("A4", "A6"):
+            kw["step_units"] = args.step_units
         else:
             kw["schedule_tag"] = args.schedule
         r = arm.run(args.inst, cell, args.effort, root=args.results, **kw)
@@ -481,6 +487,29 @@ def _cmd_report(args) -> int:
     return 0
 
 
+def _cmd_selfcheck(args) -> int:
+    from .sim import backend, selfcheck
+    log = lambda m: print(m, file=sys.stderr, flush=True)   # noqa: E731
+    busy = backend.gpu_compute_pids()
+    if busy:
+        print(f"GPU busy (compute PIDs {busy}); one GPU process at a time", file=sys.stderr)
+        return 3
+    if args.record:
+        try:
+            path = selfcheck.record(args.fixture, force=args.force, root=args.results, log=log)
+        except FileExistsError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"recorded {path}")
+        return 0
+    res = selfcheck.compare(args.fixture, root=args.results, log=log)
+    if args.json:
+        print(json.dumps(res, indent=1))
+    print(f"selfcheck {res['running_version']} vs fixture {res['fixture_version']}: {res['n_cases']} cases, "
+          f"{res['n_fail']} failed -> {'PASS' if res['passes'] else 'FAIL'}")
+    return 0 if res["passes"] else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="gsp", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -534,7 +563,10 @@ def main(argv=None) -> int:
     pa.add_argument("action", choices=["smoke", "anneal", "repro", "time", "report", "run"])
     pa.add_argument("--results", default=None)
     pa.add_argument("--no-write", action="store_true", help="report: print only")
-    pa.add_argument("--arm", choices=["A0", "A1", "A2p", "A2c", "A3", "A3d"], default="A1", help="run: the arm")
+    pa.add_argument("--arm", choices=["A0", "A1", "A2p", "A2c", "A3", "A3d", "A4", "A6"], default="A1",
+                    help="run: the arm")
+    pa.add_argument("--step-units", choices=["plan", "normalized"], default="plan",
+                    help="run (A4 / A6): the DB-QITE step convention (S8, O-13; default = PLAN §1.5 as written)")
     pa.add_argument("--n-steps", type=int, default=None, help="run (A3 / A3d): step cap for a smoke run (default 300)")
     pa.add_argument("--inst", default=None, help="run: inst_id")
     pa.add_argument("--effort", type=int, default=5, help="run: depth L (A0/A1) or ramp depth p (A2)")
@@ -622,6 +654,17 @@ def main(argv=None) -> int:
     pmg.add_argument("--dry-run", action="store_true")
     pmg.add_argument("--verbose", action="store_true")
     pmg.set_defaults(func=_cmd_merge)
+
+    psc = sub.add_parser("selfcheck", help="CUDA-Q migration acceptance test: record / compare the fixture (§3.5, S8)")
+    g = psc.add_mutually_exclusive_group(required=True)
+    g.add_argument("--record", action="store_true", help="run the set and write tests/fixtures/selfcheck_cudaq-<v>.json")
+    g.add_argument("--compare", action="store_true", help="run the set again and compare with the fixture")
+    psc.add_argument("--fixture", default=None, help="fixture path (record: default by the running version; "
+                     "compare: default selfcheck_cudaq-0.15.1.json)")
+    psc.add_argument("--force", action="store_true", help="record: replace an existing fixture")
+    psc.add_argument("--results", default=None)
+    psc.add_argument("--json", action="store_true", help="compare: print the full result as JSON")
+    psc.set_defaults(func=_cmd_selfcheck)
 
     prp = sub.add_parser("report", help="harness report stub (S15 builds it out)")
     prp.add_argument("--results", default=None)

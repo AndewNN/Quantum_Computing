@@ -55,12 +55,14 @@ def restart_seed(draw_id: str, r: int, root=None) -> int:
 
 
 def _arm_table() -> dict:
-    """name in run.json -> factory (S7 added A3, A3d; S8 adds A4, A6 HERE); `gsp plan` / `gsp run` / the post-run step
+    """name in run.json -> factory (S7 added A3, A3d; S8 added A4, A6); `gsp plan` / `gsp run` / the post-run step
     find every arm through this table (nothing else needs to change)."""
+    from .dbqite import A4, A6
     from .qaoa import A0, A1
     from .ramp import A2
     from .varqite import A3, A3d
-    return {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined"), "A3": A3, "A3d": A3d}
+    return {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined"), "A3": A3, "A3d": A3d,
+            "A4": A4, "A6": A6}
 
 
 def registered_arms() -> tuple:
@@ -68,8 +70,7 @@ def registered_arms() -> tuple:
 
 
 def make_arm(name: str) -> "Arm":
-    """An arm instance by its name in run.json (the post-run step rebuilds circuits through it; S7 / S8 add A3,
-    A3d, A4, A6 to `_arm_table`)."""
+    """An arm instance by its name in run.json (the post-run step rebuilds circuits through it; `_arm_table`)."""
     table = _arm_table()
     if name not in table:
         raise KeyError(f"no arm class registered for {name!r}")

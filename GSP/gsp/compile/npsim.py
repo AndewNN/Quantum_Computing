@@ -4,7 +4,8 @@ the C1 cross-checks). Not a harness simulator: the arms run on CUDA-Q through `g
 States are arrays of shape (2,)*n + (B,): axis k is qubit k = bit x_k (x_0 = MSB, the classical order
 of `gsp.instances.bits`), the last axis a batch of B columns, so `apply(gates, cols)` evolves B states
 at once and the identity batch gives the full unitary. Gate conventions follow CUDA-Q:
-rx(a) = exp(-i a X/2), ry(a) = exp(-i a Y/2), rz(a) = exp(-i a Z/2) = diag(e^{-ia/2}, e^{ia/2}).
+rx(a) = exp(-i a X/2), ry(a) = exp(-i a Y/2), rz(a) = exp(-i a Z/2) = diag(e^{-ia/2}, e^{ia/2}),
+r1(a) = diag(1, e^{ia}) (S8; mcr1 = its multi-controlled form).
 """
 
 from __future__ import annotations
@@ -46,6 +47,8 @@ def gate_matrix(g: Gate, params=None) -> np.ndarray:
         return rot(g.name, g.angle.value(params))
     if g.name in ("mcrx", "mcry"):
         return rot(g.name[2:], g.angle.value(params))
+    if g.name in ("r1", "mcr1"):
+        return np.diag([1.0, np.exp(1j * g.angle.value(params))]).astype(np.complex128)
     if g.name == "crz":
         return rot("rz", g.angle.value(params))
     raise ValueError(g.name)
@@ -83,7 +86,7 @@ def apply(gates, psi: np.ndarray, params=None) -> np.ndarray:
         M = gate_matrix(g, params)
         if g.name in ("cx", "crz"):
             apply_controlled(psi, (g.qubits[0],), g.qubits[1], M)
-        elif g.name in ("mcrx", "mcry"):
+        elif g.name in ("mcrx", "mcry", "mcr1"):
             apply_controlled(psi, g.qubits[:-1], g.qubits[-1], M)
         else:
             apply_controlled(psi, (), g.qubits[0], M)

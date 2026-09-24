@@ -4,7 +4,8 @@ and the convergence effort:
   per unit       two-qubit gates (ii) / (iii), T-count and T-depth (ii) / (iii) per effort unit;
   per circuit    the same per charged circuit (start circuit included);
   to convergence executions (circuits) to convergence, and their product with the per-circuit counts (A3 / A3d,
-                 `charge_model: per_unit`: units x per-unit counts + the first unit's one-off extra): total
+                 `charge_model: per_unit`: units x per-unit counts + the first unit's one-off extra; A4 / A6,
+                 `charge_model: series`: the cumulative charges of counts.json's series at t_conv): total
                  two-qubit gate executions / T to convergence ((ii) and (iii)); the (ii) product equals the
                  trajectory's g2q_ii at t_conv (checked: `chk_conv_g2q`).
   totals         the run's final cumulative circuits and g2q_ii / g2q_iii.
@@ -31,7 +32,14 @@ def resources(counts: dict, conv: dict | None = None, traj: dict | None = None) 
     if conv is not None and conv.get("conv_circuits") is not None:
         c = int(conv["conv_circuits"])
         pc = counts.get("per_circuit", {})
-        if counts.get("charge_model") == "per_unit":
+        if counts.get("charge_model") == "series":
+            # S8 (A4 / A6): the charge per unit grows (3^k); counts.json carries the cumulative charges per t
+            t = int(conv["conv_t"])
+            cum = counts.get("series", {}).get("cumulative", {})
+            for k in KEYS:
+                if k in cum:
+                    out[f"conv_exec_{k}"] = int(cum[k][t])
+        elif counts.get("charge_model") == "per_unit":
             # S7 (A3 / A3d): circuits of different sizes per unit; t units cost t x per_unit, plus a one-off
             # first_unit_extra charged with unit 1 (A3's E(theta_0))
             t = int(conv["conv_t"])

@@ -122,6 +122,21 @@ def z_op(i: int):
     return _cudaq().spin.z(i)
 
 
+def zterm_op(const: float, terms, n: int):
+    """`const + sum c_T prod_{k in T} Z_k` for terms ((qubits, c), ...) of any weight (S8: the DB-QITE example's
+    3-qubit diagonal, which has a ZZZ term). The identity sits on qubit 0, as in `spin_op`."""
+    spin = _cudaq().spin
+    op = float(const) * spin.i(0)
+    for qs, c in terms:
+        if any(int(q) >= n for q in qs):
+            raise ValueError(f"term {qs} outside {n} qubits")
+        t = float(c) * spin.z(int(qs[0]))
+        for q in qs[1:]:
+            t = t * spin.z(int(q))
+        op += t
+    return op
+
+
 def x_sum_op(n: int):
     """sum_j X_j (the X mixer's generator, A3's G_beta), terms in qubit order as the old `G_beta`."""
     spin = _cudaq().spin
