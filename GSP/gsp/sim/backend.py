@@ -122,6 +122,20 @@ def z_op(i: int):
     return _cudaq().spin.z(i)
 
 
+def x_sum_op(n: int):
+    """sum_j X_j (the X mixer's generator, A3's G_beta), terms in qubit order as the old `G_beta`."""
+    spin = _cudaq().spin
+    op = spin.x(0)
+    for j in range(1, n):
+        op = op + spin.x(j)
+    return op
+
+
+def op_product(a, b):
+    """The SpinOperator a * b (A3's G_k^2, built as the old `G * G`)."""
+    return a * b
+
+
 @lru_cache(maxsize=1)
 def _nvidia_smi() -> dict:
     try:

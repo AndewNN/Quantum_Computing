@@ -17,6 +17,7 @@ S4:  gsp arms smoke                   (every §1.2 cell at N = 4: A0 / A1 / A2p 
      gsp arms time                    (s / iteration before / after the S4 speedups; GPU, sequential subprocesses)
      gsp arms report [--no-write]     (reports/arms.md from the tables above and s4_legacy.json)
      gsp arms run --arm A1 --inst N04e004q1.5 --effort 5 [--K 12 --rule violation --conn ring] [--lam ...]
+                                      (S7: --arm A3 | A3d --lam 0.005 [--n-steps 10] runs VarQITE)
      (scripts/s4_legacy_checks.py: the legacy-equivalence numbers, results/tables/s4_legacy.json)
 S5:  gsp metrics finalize [--arms A0 ...] [--limit N] [--force]
                                       (GPU: samples.npz + postrun.json for the stored runs that lack them)
@@ -212,13 +213,16 @@ def _cmd_arms(args) -> int:
             print(f"written to {report.write(args.results)}", file=sys.stderr)
         return 0
     if args.action == "run":
-        from .arms.qaoa import A0, A1
-        from .arms.ramp import A2
-        arm = {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined")}[args.arm]()
-        cell = None if args.arm in ("A0", "A2p") else {"connectivity": args.conn, "rule": args.rule, "K": args.K}
-        kw = {"lam": args.lam} if args.arm in ("A0", "A2p") else {}
+        from .arms.base import make_arm
+        arm = make_arm(args.arm)
+        penalty = args.arm in ("A0", "A2p", "A3", "A3d")
+        cell = None if penalty else {"connectivity": args.conn, "rule": args.rule, "K": args.K}
+        kw = {"lam": args.lam} if penalty else {}
         if args.arm in ("A0", "A1"):
             kw["restart"] = args.restart
+        elif args.arm in ("A3", "A3d"):
+            if args.n_steps is not None:
+                kw["n_steps"] = args.n_steps
         else:
             kw["schedule_tag"] = args.schedule
         r = arm.run(args.inst, cell, args.effort, root=args.results, **kw)
@@ -530,7 +534,8 @@ def main(argv=None) -> int:
     pa.add_argument("action", choices=["smoke", "anneal", "repro", "time", "report", "run"])
     pa.add_argument("--results", default=None)
     pa.add_argument("--no-write", action="store_true", help="report: print only")
-    pa.add_argument("--arm", choices=["A0", "A1", "A2p", "A2c"], default="A1", help="run: the arm")
+    pa.add_argument("--arm", choices=["A0", "A1", "A2p", "A2c", "A3", "A3d"], default="A1", help="run: the arm")
+    pa.add_argument("--n-steps", type=int, default=None, help="run (A3 / A3d): step cap for a smoke run (default 300)")
     pa.add_argument("--inst", default=None, help="run: inst_id")
     pa.add_argument("--effort", type=int, default=5, help="run: depth L (A0/A1) or ramp depth p (A2)")
     pa.add_argument("--K", type=int, default=12)

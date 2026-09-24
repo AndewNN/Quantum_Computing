@@ -279,7 +279,7 @@ def d1_spec(lam_star: dict | None = None, ring_order: str = "lex") -> dict:
     return {"A0": {"init": "random", "_lam": lam_star},
             "A1": dict(sector, init="random"),
             "A2c": dict(sector, ramp_sign=-1),
-            "A3": {"_lam": lam_star},
+            "A3": {"_lam": lam_star, "metric": "M1", "n_steps": 300},     # S7: the sweep config (no smoke / timing runs)
             "A4": dict(D1_CELL, connectivity="adaptive", sector_source="ga")}
 
 

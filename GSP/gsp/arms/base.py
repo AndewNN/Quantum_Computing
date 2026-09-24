@@ -55,11 +55,12 @@ def restart_seed(draw_id: str, r: int, root=None) -> int:
 
 
 def _arm_table() -> dict:
-    """name in run.json -> factory. S7 / S8 add A3, A3d, A4, A6 HERE; `gsp plan` / `gsp run` / the post-run step
+    """name in run.json -> factory (S7 added A3, A3d; S8 adds A4, A6 HERE); `gsp plan` / `gsp run` / the post-run step
     find every arm through this table (nothing else needs to change)."""
     from .qaoa import A0, A1
     from .ramp import A2
-    return {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined")}
+    from .varqite import A3, A3d
+    return {"A0": A0, "A1": A1, "A2p": lambda: A2("penalty"), "A2c": lambda: A2("confined"), "A3": A3, "A3d": A3d}
 
 
 def registered_arms() -> tuple:
