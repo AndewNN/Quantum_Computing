@@ -26,6 +26,7 @@ overlap on m layers = 2m layers (flag gate not charged: `circuits.overlap` doc).
 cumulative sum of these, so counts.json carries `charge_model: per_unit` (`metrics.resources`).
 
 Config extras (hashed): init "ramp", metric ("M1" A3 | "diag" A3d), grad "fd_forward", dtau, n_steps, tikhonov.
+S9a, O-11 evidence only (written only when set): psd_project, theta0_jitter / theta0_jitter_seed, evidence.
 A3 is deterministic (R = 1): `restart` must be 0; `seed` = the draw's restart seed r = 0 (used only by the post-run
 sample). Effort = depth L.
 """
@@ -42,7 +43,7 @@ from ..compile import tcount
 from ..compile.transpile import cost_counts
 from ..metrics.state import METRIC_KEYS, StateLogger, metric_context
 from ..train.mclachlan import McLachlanConfig, McLachlanResult, ramp_init, run_mclachlan
-from .base import Arm, Outcome, RunConfig, draw_of, make_extras, restart_seed
+from .base import Arm, Outcome, RunConfig, draw_of, evidence_tag, make_extras, restart_seed
 from .qaoa import penalty_arm_ansatz
 
 A3_DEFAULTS = {"dtau": 0.1, "n_steps": 300, "tikhonov": 1e-6}
@@ -207,6 +208,9 @@ def step_diagnostics(res: McLachlanResult, v_tau_loop: np.ndarray | None) -> dic
            "thetadot_norm": s["thetadot_norm"], "max_angle_step": s["max_angle_step"], "sv": s["sv"], "C": s["C"],
            "thetadot": s["thetadot"],
            "M_diag": s["diag"], "fid_delta": s["delta"]}
+    for k in ("psd_clip_sum", "psd_clip_n"):                  # S9a: psd_project runs only
+        if k in s:
+            out[k] = s[k]
     T = res.n_steps
     if v_tau_loop is not None:
         prev = np.r_[np.nan, v_tau_loop[:T]]
@@ -225,20 +229,41 @@ class A3(Arm):
     metric = "M1"
 
     def config(self, inst, cell, effort, seed, *, lam=None, restart: int = 0, n_steps: int | None = None,
-               adhoc: bool = False, root=None) -> RunConfig:
-        """`n_steps` (default 300) is only for smoke / timing runs (S7, S9); the planner never passes it."""
+               tikhonov: float | None = None, psd_project: bool = False, theta0_jitter: float | None = None,
+               theta0_jitter_seed: int | None = None, evidence: str | None = None, adhoc: bool = False,
+               root=None) -> RunConfig:
+        """`n_steps` (default 300) is only for smoke / timing runs (S7, S9); the planner never passes it.
+        S9a, O-11 evidence only (the planner never passes them; the defaults hash exactly as before):
+          tikhonov            overrides 1e-6 (the value is always hashed);
+          psd_project         True: M projected onto its PSD cone before the Tikhonov solve (hashed only when True);
+          theta0_jitter(_seed) theta_0 = Ramp init + default_rng(seed).normal(scale=jitter, size=p), S7's ensemble
+                              (both or neither; hashed only when set);
+          evidence            the label of an informational run (e.g. "O-11"); no rule reads it."""
         if int(restart) != 0:
             raise ValueError(f"{self.name} is deterministic (R = 1): restart must be 0")
         if lam is None:
             raise ValueError(f"{self.name} needs lam (lambda*(N) from S9)")
+        if (theta0_jitter is None) != (theta0_jitter_seed is None):
+            raise ValueError("theta0_jitter and theta0_jitter_seed go together")
+        if theta0_jitter is not None and not float(theta0_jitter) > 0:
+            raise ValueError("theta0_jitter must be > 0")
         seed = restart_seed(draw_of(inst.inst_id), 0, root) if seed is None else int(seed)
         settings = dict(A3_DEFAULTS)
         if n_steps is not None:
             settings["n_steps"] = int(n_steps)
+        if tikhonov is not None:
+            if not float(tikhonov) > 0:
+                raise ValueError("tikhonov must be > 0")
+            settings["tikhonov"] = float(tikhonov)
         return RunConfig(arm=self.name, encoding=self.encoding, inst_id=inst.inst_id, effort_kind=self.effort_kind,
                          effort=int(effort), restart=0, lam=float(lam), seed=seed,
                          extras=make_extras(init="ramp", metric=self.metric, grad="fd_forward",
-                                            inst_adhoc=True if adhoc else None, **settings))
+                                            inst_adhoc=True if adhoc else None,
+                                            psd_project=True if psd_project else None,
+                                            theta0_jitter=None if theta0_jitter is None else float(theta0_jitter),
+                                            theta0_jitter_seed=(None if theta0_jitter_seed is None
+                                                                else int(theta0_jitter_seed)),
+                                            evidence=evidence_tag(evidence), **settings))
 
     def ansatz(self, cfg, inst, root=None):
         return penalty_arm_ansatz(inst, cfg.lam, cfg.effort), None
@@ -247,7 +272,17 @@ class A3(Arm):
         if cfg.extra("init") != "ramp" or cfg.extra("grad") != "fd_forward":
             raise ValueError(f"unsupported A3 config: init {cfg.extra('init')}, grad {cfg.extra('grad')}")
         return McLachlanConfig(metric=cfg.extra("metric"), dtau=float(cfg.extra("dtau")),
-                               n_steps=int(cfg.extra("n_steps")), tikhonov=float(cfg.extra("tikhonov")))
+                               n_steps=int(cfg.extra("n_steps")), tikhonov=float(cfg.extra("tikhonov")),
+                               psd=bool(cfg.extra("psd_project", False)))
+
+    @staticmethod
+    def theta0(cfg: RunConfig, L: int) -> np.ndarray:
+        """The Ramp init, plus the hashed theta_0 jitter of an O-11 evidence run (S7's ensemble recipe)."""
+        x0 = ramp_init(int(L))
+        if cfg.extra("theta0_jitter") is not None:
+            rng = np.random.default_rng(int(cfg.extra("theta0_jitter_seed")))
+            x0 = x0 + rng.normal(scale=float(cfg.extra("theta0_jitter")), size=x0.size)
+        return x0
 
     def execute(self, cfg: RunConfig, inst, rulers, cell, logger: bool = True, root=None) -> Outcome:
         t0 = time.perf_counter()
@@ -256,7 +291,7 @@ class A3(Arm):
         ctx = metric_context(inst, rulers, cfg.lam)
         counts = a3_counts(A, mc.metric)
         setup_s = time.perf_counter() - t0
-        res, rows, final_psi, eng = run_a3(A, mc, ctx=ctx, logger=logger)
+        res, rows, final_psi, eng = run_a3(A, mc, ctx=ctx, x0=self.theta0(cfg, A.L), logger=logger)
         t1 = time.perf_counter()
         T = res.n_steps
         if rows is not None:
@@ -293,6 +328,9 @@ class A3(Arm):
                         "eig_min_M_min": float(np.min(diag_steps["eig_min_M"][1:])) if T else None,
                         "jump_steps": int(np.sum(diag_steps["max_angle_step"][1:] > JUMP_ANGLE)),
                         "max_angle_step_max": float(np.max(diag_steps["max_angle_step"][1:])) if T else None})
+        if "psd_clip_sum" in diag_steps and T:
+            metrics["psd_clip_sum_max"] = float(np.max(diag_steps["psd_clip_sum"][1:]))
+            metrics["psd_clip_steps"] = int(np.sum(diag_steps["psd_clip_n"][1:] > 0))
         per_step = np.diff(res.wall_hist)
         timings = {"setup_s": setup_s, "train_s": float(res.wall_hist[-1]), "logger_s": res.logger_s,
                    "post_s": post_s, "per_step_s": float(res.wall_hist[-1] / T) if T else None,

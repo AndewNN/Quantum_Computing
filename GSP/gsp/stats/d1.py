@@ -292,6 +292,8 @@ def _match(df: pd.DataFrame, arm: str, flt: dict) -> pd.DataFrame:
     sub = df[(df["arm"] == arm) & (df["status"] == "done")]
     if "inst_adhoc" in sub:
         sub = sub[sub["inst_adhoc"].isna() | (sub["inst_adhoc"] == False)]   # noqa: E712 (frozen instances only)
+    if "evidence" in sub:                         # S9a: informational runs (arms.base.EVIDENCE_KEY) enter no rule
+        sub = sub[sub["evidence"].isna()]
     for k, v in flt.items():
         if k == "_lam":
             if v:

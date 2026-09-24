@@ -7,7 +7,9 @@ Effort unit: one iteration, charged 2L + 1 circuits.
 Config extras (hashed): init ("random" | "legacy"), grad ("fd_forward"); A1 also ring_order ("lex" default, D-9
 open; "rank" = the completed work's order) and sector_source ("ga" = the production GA list, D-15; "bf" = the
 brute-force reference list, used by the reproduction check). An ad hoc (not frozen) instance adds
-inst_adhoc = True.
+inst_adhoc = True. S9a (O-2 evidence only, written only when set): circuit_boosted = True (the circuit carries
+alpha x the coefficients; kappa_min, and so the Eq. 4.11 gamma range, follow the circuit) and evidence = "O-2"
+(no rule reads an evidence run).
 
 Also used by A2 (`ramp.py`): `sector_view`, `penalty_arm_ansatz`, `confined_arm_ansatz`, `trajectory_common`.
 """
@@ -25,7 +27,7 @@ from ..metrics.state import METRIC_KEYS, StateLogger, metric_context
 from ..train.adamw import AdamWConfig, train_adamw
 from ..train.gradients import ForwardFD
 from ..train.init import init_params, mm_i_eq411, mm_i_legacy
-from .base import Arm, Outcome, RunConfig, draw_of, make_extras, restart_seed
+from .base import Arm, Outcome, RunConfig, draw_of, evidence_tag, make_extras, restart_seed
 
 FD_DELTA = 1e-4
 SECTOR_SOURCES = ("ga", "bf")
@@ -72,16 +74,19 @@ def sector_view(inst, rule: str, K: int, source: str = "ga", root=None) -> Secto
 
 
 # --- ansatz of a config --------------------------------------------------------------------------------
-def penalty_arm_ansatz(inst, lam: float, L: int) -> Ansatz:
+def penalty_arm_ansatz(inst, lam: float, L: int, circuit_boosted: bool = False) -> Ansatz:
+    """`circuit_boosted` (S9a, O-2 evidence only): the circuit carries alpha x the coefficients (a different arm
+    version, PLAN §1.5); default = the completed work's un-boosted circuit."""
     if lam is None:
         raise ValueError("a penalty arm needs lam (lambda*(N) from S9; S4 checks use 0.005)")
-    return penalty_ansatz(inst.hamiltonian(float(lam)), L)
+    return penalty_ansatz(inst.hamiltonian(float(lam)), L, circuit_boosted=bool(circuit_boosted))
 
 
 def confined_arm_ansatz(inst, cfg: RunConfig, L: int, root=None) -> tuple:
     sv = sector_view(inst, cfg.rule, cfg.K, cfg.extra("sector_source", "ga"), root)
     circ = pr.build_circuit(sv, cfg.connectivity, cfg.extra("ring_order", "lex"))
-    return confined_ansatz(inst.H_obj, inst.boost_obj, circ, L), sv
+    return confined_ansatz(inst.H_obj, inst.boost_obj, circ, L,
+                           circuit_boosted=bool(cfg.extra("circuit_boosted", False))), sv
 
 
 def unit_counts(A: Ansatz, circuits_per_unit: int, unit: str) -> dict:
@@ -170,16 +175,21 @@ class A0(TrainedArm):
     encoding = "penalty"
 
     def config(self, inst, cell, effort, seed, *, restart: int = 0, lam=None, init: str = "random",
-               adhoc: bool = False, root=None) -> RunConfig:
+               circuit_boosted: bool = False, evidence: str | None = None, adhoc: bool = False,
+               root=None) -> RunConfig:
+        """`circuit_boosted` / `evidence` (S9a, O-2 evidence): hashed only when set, so every default run_id is
+        unchanged; the planner never passes them."""
         if init not in ("random", "legacy"):
             raise ValueError(init)
         seed = restart_seed(draw_of(inst.inst_id), restart, root) if seed is None else int(seed)
         return RunConfig(arm=self.name, encoding=self.encoding, inst_id=inst.inst_id, effort_kind=self.effort_kind,
                          effort=int(effort), restart=int(restart), lam=float(lam), seed=seed,
-                         extras=make_extras(init=init, grad=ForwardFD.name, inst_adhoc=True if adhoc else None))
+                         extras=make_extras(init=init, grad=ForwardFD.name, inst_adhoc=True if adhoc else None,
+                                            circuit_boosted=True if circuit_boosted else None,
+                                            evidence=evidence_tag(evidence)))
 
     def ansatz(self, cfg, inst, root=None):
-        return penalty_arm_ansatz(inst, cfg.lam, cfg.effort), None
+        return penalty_arm_ansatz(inst, cfg.lam, cfg.effort, bool(cfg.extra("circuit_boosted", False))), None
 
 
 class A1(TrainedArm):
@@ -187,7 +197,9 @@ class A1(TrainedArm):
     encoding = "confined"
 
     def config(self, inst, cell, effort, seed, *, restart: int = 0, init: str = "random", ring_order: str = "lex",
-               sector_source: str = "ga", adhoc: bool = False, root=None) -> RunConfig:
+               sector_source: str = "ga", circuit_boosted: bool = False, evidence: str | None = None,
+               adhoc: bool = False, root=None) -> RunConfig:
+        """`circuit_boosted` / `evidence`: as A0 (S9a, O-2 evidence; hashed only when set)."""
         if init not in ("random", "legacy"):
             raise ValueError(init)
         if ring_order not in pr.RING_ORDERS:
@@ -198,7 +210,9 @@ class A1(TrainedArm):
                          effort=int(effort), K=int(cell["K"]), rule=cell["rule"], connectivity=cell["connectivity"],
                          restart=int(restart), seed=seed, seed_ga=sv.seed_ga,
                          extras=make_extras(init=init, grad=ForwardFD.name, ring_order=ring_order,
-                                            sector_source=sector_source, inst_adhoc=True if adhoc else None))
+                                            sector_source=sector_source, inst_adhoc=True if adhoc else None,
+                                            circuit_boosted=True if circuit_boosted else None,
+                                            evidence=evidence_tag(evidence)))
 
     def ansatz(self, cfg, inst, root=None):
         A, sv = confined_arm_ansatz(inst, cfg, cfg.effort, root)

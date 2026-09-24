@@ -123,6 +123,34 @@ def make_extras(**kw) -> tuple:
     return tuple(sorted((k, v) for k, v in kw.items() if v is not None))
 
 
+# S9a: informational runs (evidence for Sensei's open decisions, PLAN §4.1) carry this hashed extra, e.g.
+# "O-2" or "O-11". No rule reads a run that has it (`stats.d1._match` drops them; S9b's lambda* must too).
+EVIDENCE_KEY = "evidence"
+
+
+def evidence_tag(evidence) -> str | None:
+    """Validate the evidence label of an informational run (None = a normal run: the key is not written, so every
+    default run_id is unchanged)."""
+    if evidence is None:
+        return None
+    ev = str(evidence).strip()
+    if not ev or ev != evidence:
+        raise ValueError(f"evidence tag must be a non-empty stripped string, got {evidence!r}")
+    return ev
+
+
+def is_evidence(rec) -> bool:
+    """True for a run.json / registry row / config dict that carries an evidence tag."""
+    v = rec.get(EVIDENCE_KEY) if hasattr(rec, "get") else None
+    if v is None:
+        return False
+    try:
+        import math
+        return not (isinstance(v, float) and math.isnan(v))
+    except TypeError:                                  # pragma: no cover
+        return True
+
+
 _CORE_KEYS = ("arm", "encoding", "inst_id", "effort_kind", "effort", "K", "rule", "connectivity", "restart", "lam",
               "schedule", "seed", "seed_ga", "harness_version")
 

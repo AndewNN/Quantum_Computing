@@ -18,7 +18,9 @@ Per step, at theta = theta_{t-1} (every quantity through the engine's observe-on
 Circuits per step: M1 p(p+1)/2 + p + (p + 1); diag p + (p + 1). The first step also measures E(theta_0), once.
 
 Settings (verbatim, `McLachlanConfig` defaults): dtau 0.1, 300 steps, FD shift 1e-4 (forward), Tikhonov 1e-6,
-kappa 0.01, cap angle 0.02 rad, f_tol 1e-4, patience 3.
+kappa 0.01, cap angle 0.02 rad, f_tol 1e-4, patience 3. `psd` (S9a, O-11 evidence only, default off): M is replaced
+by its projection onto the PSD cone (negative eigenvalues clipped at 0) before the Tikhonov solve; the spectrum
+diagnostics stay those of the estimate, and psd_clip_sum / psd_clip_n record what was clipped.
 
 Diagnostics per step (PLAN §1.6; the arm adds V_tau from the logger's state, never used by the update):
 cond(M) and the singular values of the unregularized M, its numerical rank (numpy's default tolerance) and the
@@ -52,6 +54,7 @@ class McLachlanConfig:
     cap_angle: float = 0.02
     f_tol: float = 1e-4
     patience: int = 3
+    psd: bool = False              # S9a (O-11 evidence only): project M onto its PSD cone before the Tikhonov solve
 
     def __post_init__(self):
         if self.metric not in METRICS:
@@ -100,6 +103,18 @@ def build_C(energy, params: np.ndarray, E_0: float, fd_shift: float) -> np.ndarr
         pp[i] += fd_shift
         C[i] = -0.5 * (energy(pp) - E_0) / fd_shift
     return C
+
+
+def psd_project(A: np.ndarray) -> tuple:
+    """(V max(w, 0) V^T of the symmetrized A, sum of the clipped |negative eigenvalues|, how many were clipped): the
+    old SHOTS branch's `psd` option (O-11 evidence; never used by the plan's A3). A matrix with no negative eigenvalue
+    is returned unchanged (the eigen-reconstruction would only add rounding)."""
+    S = 0.5 * (A + A.T)
+    w, V = np.linalg.eigh(S)
+    neg = w < 0
+    if not neg.any():
+        return A, 0.0, 0
+    return (V * np.maximum(w, 0.0)) @ V.T, float(-w[neg].sum()), int(neg.sum())
 
 
 def spectrum(A: np.ndarray) -> dict:
@@ -192,11 +207,15 @@ def run_mclachlan(engine, x0, cfg: McLachlanConfig = McLachlanConfig(), logger=N
                 delta = nanp.copy()
                 A = np.diag(d)
             C = build_C(engine.energy, x, E_prev, cfg.fd_shift)
+        sp = spectrum(A)                                   # of the estimate (before any PSD projection)
+        if cfg.psd:
+            A, clip_sum, clip_n = psd_project(A)
+            step.setdefault("psd_clip_sum", [np.nan]).append(clip_sum)
+            step.setdefault("psd_clip_n", [np.nan]).append(float(clip_n))
         td = np.linalg.solve(A + cfg.tikhonov * np.eye(p), C)
         cooling = float(C @ td)
         x += cfg.dtau * td
         E_new = float(engine.energy(x))
-        sp = spectrum(A)
         this = {"variance": n_var, "overlap": n_fid, "energy": p + 1 if cfg.metric != "exact" else 1}
         step_calls.append(this)
         calls = this if calls is None else calls
