@@ -131,6 +131,52 @@ def part_specs(part: str, exps, ramp=RAMP_DEFAULT) -> list[dict]:
 PARTS = ("paper", "sc_k12_ext", "sc_k24", "sp_ext", "sc_k48")
 
 
+# --- extras (2026-09-25, queued behind Exp1-4): gate-matched SP, restarts ------------------------------------------
+def gate_matched_L0(N: int, L1: int = 5, K: int = 12) -> int:
+    """PLAN §1.3 on the TQE instances: ceil(median over the paper's 10 draws of CX_ii(SC circuit at L1, bf top-K,
+    lex ring, start included) / CX_ii(one SP layer)). Counting only (no simulation)."""
+    from ..circuits import preserving as pr
+    from ..circuits.ansatz import confined_ansatz
+    from ..instances.adhoc import adhoc_instance
+    from ..arms.qaoa import SectorView, legacy_rank, penalty_arm_ansatz
+    cx, lay = [], None
+    for e in DRAWS:
+        inst = adhoc_instance(N, e, Q)[0]
+        r = legacy_rank(inst, K)
+        sv = SectorView(n=int(inst.n), idx=np.sort(r), rank_idx=r, source="bf", seed_ga=None)
+        A = confined_ansatz(inst.H_obj, inst.boost_obj, pr.build_circuit(sv, "ring", "lex"), L1, circuit_boosted=True)
+        cx.append(A.counts["per_circuit"]["cx_ii"])
+        lay = penalty_arm_ansatz(inst, LAMS[0], 1, True).counts["per_circuit"]["cx_ii"]
+    return int(np.ceil(np.median(cx) / lay))
+
+
+def gm_specs(B: float, dgamma: float, lam: float = 0.0005, L1: int = 5, Ns=range(3, 8)) -> list[dict]:
+    """Gate-matched SP (the paper's missing baseline): A0 at L0(N, L1), Exp3 settings (fixed-total-angle ramp at
+    depth L0, wd 0.01), one lambda."""
+    out = []
+    for N in Ns:
+        L0 = gate_matched_L0(N, L1)
+        kw = {"restart": 0, "circuit_boosted": True, "lam": float(lam), "init": "ramp",
+              "ramp": [2.0 * float(B) / (L0 + 1), float(dgamma)]}
+        for e in DRAWS:
+            s = _spec("SP", 3, N, e, L0, dict(kw), None, f"gm_L{L1}")
+            s["label"] = f"TQE gm Exp3 SP N{N} lam{lam:g} L{L0} (=SC K12 L{L1}) e{e}"
+            out.append(s)
+    return out
+
+
+def restart_specs(restarts=(1, 2, 3, 4), exps=(2,)) -> list[dict]:
+    """Extra random restarts r of the paper grid (Exp1 / Exp2 settings); seed = the §1.1 formula with r."""
+    out = []
+    for r in restarts:
+        for s in part_specs("paper", exps):
+            s = dict(s, kw=dict(s["kw"], restart=int(r)), restart=int(r), tier=f"paper_r{r}",
+                     seed=restart_seed_formula(s["N"], int(s["inst_id"][4:7]), r))
+            s["label"] = s["label"].replace("TQE paper", f"TQE paper r{r}")
+            out.append(s)
+    return out
+
+
 def all_specs(exps=(1, 2, 3, 4), parts=PARTS, ramp=RAMP_DEFAULT) -> list[dict]:
     out = []
     for p in parts:

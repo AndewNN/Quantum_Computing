@@ -174,3 +174,14 @@ def test_q_take_and_ls(tmp_path, fakes):
     assert [json.loads(x)["effort"] for x in q.read_text().splitlines()] == [1, 2]
     assert qedit.take(q, tmp_path / "b.jsonl", match='"effort":1', out_root=out) == 0     # done lines stay
     assert qedit.top(q, '"effort": 2') == 1
+
+
+def test_extras_gate_matched_and_restarts():
+    assert tqe.gate_matched_L0(4, 5) == 59 and tqe.gate_matched_L0(7, 5) == 36     # = reports/matched_depths.md
+    G = tqe.gm_specs(2.2, 3.0, Ns=(7,))
+    assert len(G) == 10 and {g["effort"] for g in G} == {36}
+    assert abs(G[0]["kw"]["ramp"][0] - 4.4 / 37) < 1e-12 and G[0]["kw"]["lam"] == 0.0005
+    R = tqe.restart_specs((1,))
+    assert len(R) == 1050 and all(s["kw"]["restart"] == 1 for s in R)
+    s = next(x for x in R if x["inst_id"] == "N05e003q1.5")
+    assert s["seed"] == tqe.restart_seed_formula(5, 3, 1) == 4001 + 4099 * 3 + 4999 * 5 + 5099
