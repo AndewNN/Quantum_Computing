@@ -37,6 +37,17 @@ DRAWS = tuple(range(10))
 Q = 1.5
 RAMP_DEFAULT = (1.5, 3.0)                    # the paper's (dbeta, dgamma), plan default; Sensei may re-pick
 
+
+def total_angle_ramp(B: float, dgamma: float) -> dict:
+    """Fixed total mixer angle (Sensei, 2026-09-25): sum_l |beta_l| = dbeta_L (L+1)/2 = B, so dbeta_L = 2B/(L+1);
+    dgamma fixed. Returns {L: (dbeta_L, dgamma)} for the paper depths."""
+    return {L: (2.0 * float(B) / (L + 1), float(dgamma)) for L in DEPTHS}
+
+
+def ramp_at(ramp, L: int) -> tuple:
+    """(dbeta, dgamma) at depth L: `ramp` is one (dbeta, dgamma) for every L or a {L: (dbeta, dgamma)} rule."""
+    return tuple(ramp[L]) if isinstance(ramp, dict) else tuple(ramp)
+
 # Paper Table (SP, X mixer): alpha[lam][N]
 ALPHA_SP = {
     0.0005: {3: 20000, 4: 10000, 5: 5000, 6: 2500, 7: 1800, 8: 1400},
@@ -63,7 +74,7 @@ def inst_id(N: int, e: int) -> str:
     return f"N{N:02d}e{e:03d}q{Q}"
 
 
-def exp_kw(method: str, exp: int, N: int, lam=None, ramp=RAMP_DEFAULT) -> dict | None:
+def exp_kw(method: str, exp: int, N: int, lam=None, ramp=RAMP_DEFAULT, L: int | None = None) -> dict | None:
     """The config kwargs of one Exp (None: Exp1 has no group-wise alpha here)."""
     kw = {"restart": 0, "circuit_boosted": True}
     if method == "SC":
@@ -76,7 +87,8 @@ def exp_kw(method: str, exp: int, N: int, lam=None, ramp=RAMP_DEFAULT) -> dict |
             return None
         kw["alpha"] = float(a)
     if exp in (3, 4):
-        kw.update(init="ramp", ramp=[float(ramp[0]), float(ramp[1])])
+        db, dg = ramp_at(ramp, L)
+        kw.update(init="ramp", ramp=[float(db), float(dg)])
     if exp == 4:
         kw["weight_decay"] = 0.0
     return kw
@@ -107,10 +119,10 @@ def part_specs(part: str, exps, ramp=RAMP_DEFAULT) -> list[dict]:
         for method, K, Ns in grids:
             for N in Ns:
                 for lam in (LAMS if method == "SP" else (None,)):
-                    kw = exp_kw(method, exp, N, lam, ramp)
-                    if kw is None:
-                        continue
                     for L in DEPTHS:
+                        kw = exp_kw(method, exp, N, lam, ramp, L)
+                        if kw is None:
+                            continue
                         for e in DRAWS:
                             out.append(_spec(method, exp, N, e, L, dict(kw), K, part))
     return out

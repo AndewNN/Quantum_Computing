@@ -105,6 +105,18 @@ def test_tqe_plan_counts_and_seeds():
     assert abs(hours["a"] - hours["b"]) < 0.2                        # greedy: within one long run
 
 
+def test_total_angle_ramp_per_depth():
+    r = tqe.total_angle_ramp(2.2, 2.5)
+    assert {L: round(v[0] * (L + 1) / 2, 12) for L, v in r.items()} == {5: 2.2, 7: 2.2, 9: 2.2}
+    S = tqe.part_specs("paper", (3, 4), ramp=r)
+    for s in S:
+        db, dg = s["kw"]["ramp"]
+        assert abs(db - 2 * 2.2 / (s["effort"] + 1)) < 1e-12 and dg == 2.5
+        assert s["kw"]["init"] == "ramp"
+    assert len(S) == 2 * (5 * 3 * 10 + 6 * 5 * 3 * 10)
+    assert all(s["kw"]["ramp"] == [1.5, 3.0] for s in tqe.part_specs("paper", (3,)))
+
+
 def test_tqe_resolve_unique_ids(tmp_path):
     R = tqe.resolve_specs(tqe.part_specs("paper", (1, 2, 3, 4))[:400], tmp_path)
     assert len({r["run_id"] for r in R}) == 400

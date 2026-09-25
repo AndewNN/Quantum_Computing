@@ -452,8 +452,9 @@ def _cmd_tqe(args) -> int:
     from pathlib import Path
     from .runner import tqe
     speeds = {m.split("=")[0]: float(m.split("=")[1]) for m in args.machines}
-    specs = tqe.all_specs(exps=tuple(args.exps), parts=tuple(args.parts or tqe.PARTS),
-                          ramp=tuple(args.ramp) if args.ramp else tqe.RAMP_DEFAULT)
+    ramp = (tqe.total_angle_ramp(*args.ramp_total) if args.ramp_total else
+            tuple(args.ramp) if args.ramp else tqe.RAMP_DEFAULT)
+    specs = tqe.all_specs(exps=tuple(args.exps), parts=tuple(args.parts or tqe.PARTS), ramp=ramp)
     summ = tqe.summary(specs)
     print(json.dumps(summ, indent=1))
     parts, hours = tqe.split(specs, speeds)
@@ -694,6 +695,8 @@ def main(argv=None) -> int:
     ptq.add_argument("--exps", type=int, nargs="+", default=[1, 2, 3, 4])
     ptq.add_argument("--parts", nargs="+", default=None, help="default: every part, in priority order")
     ptq.add_argument("--ramp", type=float, nargs=2, default=None, metavar=("DBETA", "DGAMMA"))
+    ptq.add_argument("--ramp-total", type=float, nargs=2, default=None, metavar=("B", "DGAMMA"),
+                     help="fixed total mixer angle: dbeta_L = 2B/(L+1), dgamma fixed (overrides --ramp)")
     ptq.add_argument("--machines", nargs="+", default=["local=1.0"], help="name=relative speed (local 4080 = 1)")
     ptq.add_argument("--out-dir", required=True, help="where {name}.jsonl queue files are written")
     ptq.add_argument("--results", default=None, help="the TQE results root (default GSP_RESULTS; no frozen instances)")
