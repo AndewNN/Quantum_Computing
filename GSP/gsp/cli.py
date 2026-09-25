@@ -415,7 +415,8 @@ def _cmd_run(args) -> int:
         out = run_queue(args.queue, root=args.results, out_root=args.runs_root, retry_failed=not args.no_retry_failed,
                         steal=args.steal, gpu=not args.no_gpu_guard, finalize=not args.no_finalize,
                         aggregate=not args.no_aggregate, heartbeat_s=args.heartbeat, max_runs=args.max_runs,
-                        debug_pause_postrun=args.debug_pause_postrun)
+                        debug_pause_postrun=args.debug_pause_postrun, dynamic=args.dynamic, follow=args.follow,
+                        poll_s=args.poll)
     except QueueBusy as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return EXIT_BUSY
@@ -424,6 +425,48 @@ def _cmd_run(args) -> int:
         return EXIT_USAGE
     print(json.dumps(out))
     return int(out["exit_code"])
+
+
+def _cmd_q(args) -> int:
+    from .runner import qedit
+    a = args.action
+    if a == "ls":
+        print(json.dumps(qedit.ls(args.queue, args.results, args.show), indent=1))
+        return 0
+    if a in ("rm", "top") and not args.match:
+        print(f"q {a} needs --match", file=sys.stderr)
+        return 2
+    if a in ("add", "take") and not args.other:
+        print(f"q {a} needs the other file", file=sys.stderr)
+        return 2
+    n = {"add": lambda: qedit.add(args.queue, args.other, top=args.top),
+         "rm": lambda: qedit.rm(args.queue, args.match),
+         "top": lambda: qedit.top(args.queue, args.match),
+         "take": lambda: qedit.take(args.queue, args.other, match=args.match, tail=args.tail,
+                                    out_root=args.results)}[a]()
+    print(f"q {a}: {n} line(s)")
+    return 0
+
+
+def _cmd_tqe(args) -> int:
+    from pathlib import Path
+    from .runner import tqe
+    speeds = {m.split("=")[0]: float(m.split("=")[1]) for m in args.machines}
+    specs = tqe.all_specs(exps=tuple(args.exps), parts=tuple(args.parts or tqe.PARTS),
+                          ramp=tuple(args.ramp) if args.ramp else tqe.RAMP_DEFAULT)
+    summ = tqe.summary(specs)
+    print(json.dumps(summ, indent=1))
+    parts, hours = tqe.split(specs, speeds)
+    print(f"{len(specs)} runs; est. hours per machine (likely): " + ", ".join(f"{m} {h:.1f}" for m, h in hours.items()))
+    if args.dry_run:
+        return 0
+    specs = tqe.resolve_specs(specs, args.results)
+    rid = {(s["label"], s["tier"]): s for s in specs}
+    for m, lst in parts.items():
+        out = Path(args.out_dir) / f"tqe_{m}.jsonl"
+        tqe.write_lines([rid[(s["label"], s["tier"])] for s in lst], out)
+        print(f"wrote {out}: {len(lst)} lines")
+    return 0
 
 
 def _cmd_progress(args) -> int:
@@ -628,9 +671,34 @@ def main(argv=None) -> int:
     prn.add_argument("--no-aggregate", action="store_true", help="skip index + aggregate at the end")
     prn.add_argument("--heartbeat", type=float, default=30.0, help="progress-file heartbeat period (s)")
     prn.add_argument("--no-gpu-guard", action="store_true", help="do not refuse when the GPU is busy")
+    prn.add_argument("--dynamic", action="store_true", help="re-read the queue file before every run (edit it live "
+                     "with `gsp q`); file order = priority")
+    prn.add_argument("--follow", action="store_true", help="with --dynamic: wait for new lines when exhausted")
+    prn.add_argument("--poll", type=float, default=30.0, help="--follow poll period (s)")
     prn.add_argument("--debug-pause-postrun", type=float, default=0.0,
                      help="TEST ONLY: sleep S seconds between 'done' and the post-run step (kill tests)")
     prn.set_defaults(func=_cmd_run)
+
+    pq = sub.add_parser("q", help="edit a queue file live (dynamic runner; TQE rerun)")
+    pq.add_argument("action", choices=["ls", "add", "rm", "top", "take"])
+    pq.add_argument("queue")
+    pq.add_argument("other", nargs="?", default=None, help="add: source file; take: destination file")
+    pq.add_argument("--match", default=None, help="substring of the raw JSON line")
+    pq.add_argument("--tail", type=int, default=None, help="take: the last N pending lines")
+    pq.add_argument("--top", action="store_true", help="add: prepend instead of append")
+    pq.add_argument("--results", default=None, help="results root of the runs (states)")
+    pq.add_argument("--show", type=int, default=10)
+    pq.set_defaults(func=_cmd_q)
+
+    ptq = sub.add_parser("tqe", help="TQE rerun: plan the Exp1-4 queues and split them across machines")
+    ptq.add_argument("--exps", type=int, nargs="+", default=[1, 2, 3, 4])
+    ptq.add_argument("--parts", nargs="+", default=None, help="default: every part, in priority order")
+    ptq.add_argument("--ramp", type=float, nargs=2, default=None, metavar=("DBETA", "DGAMMA"))
+    ptq.add_argument("--machines", nargs="+", default=["local=1.0"], help="name=relative speed (local 4080 = 1)")
+    ptq.add_argument("--out-dir", required=True, help="where {name}.jsonl queue files are written")
+    ptq.add_argument("--results", default=None, help="the TQE results root (default GSP_RESULTS; no frozen instances)")
+    ptq.add_argument("--dry-run", action="store_true")
+    ptq.set_defaults(func=_cmd_tqe)
 
     ppg = sub.add_parser("progress", help="show queue progress / heartbeat files (S6)")
     ppg.add_argument("names", nargs="*", help="queue names (default: every progress file)")

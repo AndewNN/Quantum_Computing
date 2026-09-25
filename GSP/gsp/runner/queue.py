@@ -19,6 +19,12 @@ post-run step included), then rebuilds the registry and runs the incremental `gs
   seconds from a heartbeat thread): pid, host, state, counts, the current run and its phase (setup / execute /
   postrun), elapsed, rate and ETA. `logs/queue_{name}.log` has one line per event; `logs/runs/{arm}/{run_id}.log`
   one block per attempt (spec, Python-level stdout / stderr of the run, status, metrics or traceback).
+* **Dynamic mode** (`dynamic=True`, `gsp run --dynamic`; TQE rerun): the queue file is re-read before every run
+  and the first line (file order = priority) that is not done, not tried in this session and not running on
+  another host is run next. Lines may be added, removed or reordered at any time (`gsp q ...`, atomic rewrites)
+  without stopping the runner; the in-flight run is never touched. `follow=True` waits for new lines when the
+  queue is exhausted (poll every `poll_s` seconds) instead of finishing. A spec may carry `seed` (the restart seed
+  written at plan time, for ad hoc instances outside the seed table).
 * **One process at a time.** An exclusive `flock` on `logs/queue.lock` of the output store, and (gpu=True) the
   nvidia-smi guard: refuse to start while another process holds a CUDA context.
 """
@@ -135,7 +141,7 @@ class Runner:
     def __init__(self, queue_path, root=None, out_root=None, *, retry_failed: bool = True, steal: bool = False,
                  gpu: bool = True, finalize: bool = True, aggregate: bool = True, heartbeat_s: float = 30.0,
                  max_runs: int | None = None, arm_factory=None, debug_pause_postrun: float = 0.0,
-                 echo=True):
+                 echo=True, dynamic: bool = False, follow: bool = False, poll_s: float = 30.0):
         self.queue_path = Path(queue_path)
         self.name = queue_name(queue_path)
         self.root = root                                   # instances / sectors / seed table
@@ -144,6 +150,9 @@ class Runner:
         self.do_aggregate, self.heartbeat_s, self.max_runs = aggregate, float(heartbeat_s), max_runs
         self.debug_pause_postrun = float(debug_pause_postrun)
         self.echo = echo
+        self.dynamic, self.follow, self.poll_s = bool(dynamic or follow), bool(follow), float(poll_s)
+        self._done_ids: set = set()
+        self._tried: set = set()
         if arm_factory is None:
             from ..arms.base import make_arm
             arm_factory = make_arm
@@ -362,13 +371,14 @@ class Runner:
                     arm = self.arm_factory(arm_name)
                     inst, rul, adhoc = self._instance(spec["inst_id"])
                     kw = dict(spec.get("kw") or {})
-                    cfg = arm.config(inst, spec.get("cell"), spec["effort"], None, adhoc=adhoc, root=self.root, **kw)
+                    seed = spec.get("seed")
+                    cfg = arm.config(inst, spec.get("cell"), spec["effort"], seed, adhoc=adhoc, root=self.root, **kw)
                     if spec.get("run_id") and cfg.run_id != spec["run_id"]:
                         raise PlanMismatch(f"spec run_id {spec['run_id']} but the arm hashes it to {cfg.run_id} "
                                            "(stale queue: re-run `gsp plan`)")
                     rid = cfg.run_id
                     self._set_current(i, spec, "execute")
-                    rr = arm.run(inst, spec.get("cell"), spec["effort"], rulers=rul, root=self.root,
+                    rr = arm.run(inst, spec.get("cell"), spec["effort"], seed, rulers=rul, root=self.root,
                                  runs_root=self.out_root, finalize=self.finalize, on_done=self._on_done(i, spec), **kw)
                 status = rr.status
             except QueueStop as exc:
@@ -434,6 +444,72 @@ class Runner:
         c["remaining"] = c["unique"] - c["done_before"]
         return out, c
 
+    def _next_dynamic(self):
+        """Re-read the queue file; return (line index, spec) of the first runnable line, or None. Updates the
+        progress counts (unique / done_total / remaining) from the file as it is now."""
+        try:
+            specs = read_queue(self.queue_path)
+        except Exception as exc:                       # a bad edit: keep the runner alive, retry at the next poll
+            self.log(f"queue re-read FAILED ({type(exc).__name__}: {exc}); retry in {self.poll_s:g} s")
+            return None, False
+        c = self.progress["counts"]
+        seen, pending, nxt = set(), 0, None
+        for i, sp in enumerate(specs):
+            rid = sp.get("run_id")
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            if rid in self._done_ids:
+                continue
+            st, rec = run_state(sp["arm"], rid, self.out_root)
+            if st == "done":
+                if not self.finalize or postrun_state(run_dir(sp["arm"], rid, self.out_root)) == "finalized":
+                    self._done_ids.add(rid)
+                    continue
+            pending += 1
+            if nxt is not None or rid in self._tried:
+                continue
+            if st == "running" and (rec or {}).get("host") != self.host and not self.steal:
+                continue
+            if st == "failed" and not self.retry_failed:
+                continue
+            nxt = (i, sp)
+        c["unique"] = len(seen)
+        c["remaining"] = pending
+        c["done_before"] = len(seen) - pending - c["done_now"]
+        return nxt, True
+
+    def _run_dynamic(self):
+        """The dynamic loop (see the module docstring). Returns the stop signal or None."""
+        idle_logged = False
+        while True:
+            if self.stop_signal is not None:
+                return self.stop_signal
+            if self.graceful:
+                return None
+            nxt, ok = self._next_dynamic()
+            if nxt is None:
+                if ok and not self.follow:
+                    return None
+                if not idle_logged:
+                    self.log(f"queue exhausted: waiting for new lines (poll {self.poll_s:g} s)")
+                    idle_logged = True
+                self.progress["state"] = "waiting"
+                self.write_progress()
+                t_end = time.time() + self.poll_s
+                while time.time() < t_end and self.stop_signal is None and not self.graceful:
+                    time.sleep(min(1.0, self.poll_s))
+                continue
+            if idle_logged:
+                self.progress["state"] = "running"
+                idle_logged = False
+            i, spec = nxt
+            self._tried.add(spec["run_id"])
+            self.progress["position"] = i
+            self._process(i, spec)
+            if self.max_runs is not None and self.progress["counts"]["attempted"] >= self.max_runs:
+                self.graceful = True
+
     def run(self) -> dict:
         t_start = time.time()
         specs = read_queue(self.queue_path)
@@ -459,7 +535,7 @@ class Runner:
             self._hb.start()
             stopped = None
             try:
-                for i, spec in enumerate(specs):
+                for i, spec in enumerate([] if self.dynamic else specs):
                     if self.stop_signal is not None:
                         stopped = self.stop_signal
                         break
@@ -467,6 +543,8 @@ class Runner:
                         break
                     self.progress["position"] = i
                     self._process(i, spec)
+                if self.dynamic:
+                    stopped = self._run_dynamic()
                 if self.stop_signal is not None:
                     stopped = self.stop_signal
                 if stopped is None and not self.graceful and self.do_aggregate:

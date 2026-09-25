@@ -10,6 +10,11 @@ brute-force reference list, used by the reproduction check). An ad hoc (not froz
 inst_adhoc = True. S9a (O-2 evidence only, written only when set): circuit_boosted = True (the circuit carries
 alpha x the coefficients; kappa_min, and so the Eq. 4.11 gamma range, follow the circuit) and evidence = "O-2"
 (no rule reads an evidence run).
+TQE rerun flags (tqe_rerun_plan.md; each hashed only when set, so every other run_id is unchanged):
+alpha_override = a fixed boost alpha instead of the instance's Jh boost (the paper's group-wise Exp1 factors;
+it scales the circuit when circuit_boosted, f = <alpha H> and the Eq. 4.11 range); init = "ramp" with
+ramp_dbeta / ramp_dgamma = the linear-ramp init of `train.schedules.ramp_params` (RAMP_SIGN, gamma in boosted units:
+alpha = 1 on the boosted circuit); weight_decay = AdamW's decoupled weight decay (default 0.01; Exp4 = 0).
 
 Also used by A2 (`ramp.py`): `sector_view`, `penalty_arm_ansatz`, `confined_arm_ansatz`, `trajectory_common`.
 """
@@ -27,10 +32,27 @@ from ..metrics.state import METRIC_KEYS, StateLogger, metric_context
 from ..train.adamw import AdamWConfig, train_adamw
 from ..train.gradients import ForwardFD
 from ..train.init import init_params, mm_i_eq411, mm_i_legacy
+from ..train.schedules import ramp_params
 from .base import Arm, Outcome, RunConfig, draw_of, evidence_tag, make_extras, restart_seed
 
 FD_DELTA = 1e-4
 SECTOR_SOURCES = ("ga", "bf")
+INITS = ("random", "legacy", "ramp")
+
+
+def tqe_extras(init: str, ramp, alpha, weight_decay) -> dict:
+    """The hashed TQE extras (None = not set, so not hashed)."""
+    if init not in INITS:
+        raise ValueError(init)
+    if (init == "ramp") != (ramp is not None):
+        raise ValueError("init='ramp' needs ramp=(dbeta, dgamma), and ramp is only for init='ramp'")
+    if alpha is not None and not float(alpha) > 0:
+        raise ValueError("alpha must be > 0")
+    if weight_decay is not None and not float(weight_decay) >= 0:
+        raise ValueError("weight_decay must be >= 0")
+    db, dg = (None, None) if ramp is None else (float(ramp[0]), float(ramp[1]))
+    return {"ramp_dbeta": db, "ramp_dgamma": dg, "alpha_override": None if alpha is None else float(alpha),
+            "weight_decay": None if weight_decay is None else float(weight_decay)}
 
 
 # --- sectors -----------------------------------------------------------------------------------------
@@ -74,18 +96,21 @@ def sector_view(inst, rule: str, K: int, source: str = "ga", root=None) -> Secto
 
 
 # --- ansatz of a config --------------------------------------------------------------------------------
-def penalty_arm_ansatz(inst, lam: float, L: int, circuit_boosted: bool = False) -> Ansatz:
+def penalty_arm_ansatz(inst, lam: float, L: int, circuit_boosted: bool = False, alpha=None) -> Ansatz:
     """`circuit_boosted` (S9a, O-2 evidence only): the circuit carries alpha x the coefficients (a different arm
-    version, PLAN §1.5); default = the completed work's un-boosted circuit."""
+    version, PLAN §1.5); default = the completed work's un-boosted circuit. `alpha` (TQE): a fixed boost instead of
+    the Jh boost of H(lam)."""
     if lam is None:
         raise ValueError("a penalty arm needs lam (lambda*(N) from S9; S4 checks use 0.005)")
-    return penalty_ansatz(inst.hamiltonian(float(lam)), L, circuit_boosted=bool(circuit_boosted))
+    return penalty_ansatz(inst.hamiltonian(float(lam)), L, alpha=None if alpha is None else float(alpha),
+                          circuit_boosted=bool(circuit_boosted))
 
 
 def confined_arm_ansatz(inst, cfg: RunConfig, L: int, root=None) -> tuple:
     sv = sector_view(inst, cfg.rule, cfg.K, cfg.extra("sector_source", "ga"), root)
     circ = pr.build_circuit(sv, cfg.connectivity, cfg.extra("ring_order", "lex"))
-    return confined_ansatz(inst.H_obj, inst.boost_obj, circ, L,
+    alpha = cfg.extra("alpha_override")
+    return confined_ansatz(inst.H_obj, inst.boost_obj if alpha is None else float(alpha), circ, L,
                            circuit_boosted=bool(cfg.extra("circuit_boosted", False))), sv
 
 
@@ -122,8 +147,13 @@ class TrainedArm(Arm):
     def execute(self, cfg: RunConfig, inst, rulers, cell, logger: bool = True, root=None) -> Outcome:
         t0 = time.perf_counter()
         A, sector_idx = self.ansatz(cfg, inst, root)
-        legacy = cfg.extra("init", "random") == "legacy"
-        x0 = init_params(A, cfg.seed, legacy=legacy)
+        init = cfg.extra("init", "random")
+        legacy = init == "legacy"
+        if init == "ramp":                       # TQE: gamma in boosted units (alpha = 1 on the boosted circuit)
+            x0 = ramp_params(A.L, float(cfg.extra("ramp_dbeta")), float(cfg.extra("ramp_dgamma")),
+                             1.0 if A.meta.get("circuit_boosted") else A.alpha)
+        else:
+            x0 = init_params(A, cfg.seed, legacy=legacy)
         if legacy:
             from ..circuits.legacy_pauli import legacy_mm_p
             mm_p = legacy_mm_p(A.circ.order, A.n) if A.kind == "confined" else 1e9
@@ -133,7 +163,9 @@ class TrainedArm(Arm):
         ctx = metric_context(inst, rulers, cfg.lam if A.kind == "penalty" else None, sector_idx=sector_idx)
         log = StateLogger(A, ctx) if logger else None
         setup_s = time.perf_counter() - t0
-        res = train_adamw(A.energy, x0, AdamWConfig(), ForwardFD(FD_DELTA), logger=log)
+        wd = cfg.extra("weight_decay")
+        opt = AdamWConfig() if wd is None else AdamWConfig(weight_decay=float(wd))
+        res = train_adamw(A.energy, x0, opt, ForwardFD(FD_DELTA), logger=log)
         t1 = time.perf_counter()
         T = res.n_iter
         if log is not None:
@@ -176,20 +208,20 @@ class A0(TrainedArm):
 
     def config(self, inst, cell, effort, seed, *, restart: int = 0, lam=None, init: str = "random",
                circuit_boosted: bool = False, evidence: str | None = None, adhoc: bool = False,
-               root=None) -> RunConfig:
-        """`circuit_boosted` / `evidence` (S9a, O-2 evidence): hashed only when set, so every default run_id is
-        unchanged; the planner never passes them."""
-        if init not in ("random", "legacy"):
-            raise ValueError(init)
+               ramp=None, alpha=None, weight_decay=None, root=None) -> RunConfig:
+        """`circuit_boosted` / `evidence` (S9a, O-2 evidence) and the TQE flags `ramp` / `alpha` / `weight_decay`:
+        hashed only when set, so every default run_id is unchanged; the planner never passes them."""
+        tqe = tqe_extras(init, ramp, alpha, weight_decay)
         seed = restart_seed(draw_of(inst.inst_id), restart, root) if seed is None else int(seed)
         return RunConfig(arm=self.name, encoding=self.encoding, inst_id=inst.inst_id, effort_kind=self.effort_kind,
                          effort=int(effort), restart=int(restart), lam=float(lam), seed=seed,
                          extras=make_extras(init=init, grad=ForwardFD.name, inst_adhoc=True if adhoc else None,
                                             circuit_boosted=True if circuit_boosted else None,
-                                            evidence=evidence_tag(evidence)))
+                                            evidence=evidence_tag(evidence), **tqe))
 
     def ansatz(self, cfg, inst, root=None):
-        return penalty_arm_ansatz(inst, cfg.lam, cfg.effort, bool(cfg.extra("circuit_boosted", False))), None
+        return penalty_arm_ansatz(inst, cfg.lam, cfg.effort, bool(cfg.extra("circuit_boosted", False)),
+                                  alpha=cfg.extra("alpha_override")), None
 
 
 class A1(TrainedArm):
@@ -198,10 +230,9 @@ class A1(TrainedArm):
 
     def config(self, inst, cell, effort, seed, *, restart: int = 0, init: str = "random", ring_order: str = "lex",
                sector_source: str = "ga", circuit_boosted: bool = False, evidence: str | None = None,
-               adhoc: bool = False, root=None) -> RunConfig:
-        """`circuit_boosted` / `evidence`: as A0 (S9a, O-2 evidence; hashed only when set)."""
-        if init not in ("random", "legacy"):
-            raise ValueError(init)
+               adhoc: bool = False, ramp=None, alpha=None, weight_decay=None, root=None) -> RunConfig:
+        """`circuit_boosted` / `evidence` and the TQE flags: as A0 (hashed only when set)."""
+        tqe = tqe_extras(init, ramp, alpha, weight_decay)
         if ring_order not in pr.RING_ORDERS:
             raise ValueError(ring_order)
         seed = restart_seed(draw_of(inst.inst_id), restart, root) if seed is None else int(seed)
@@ -212,7 +243,7 @@ class A1(TrainedArm):
                          extras=make_extras(init=init, grad=ForwardFD.name, ring_order=ring_order,
                                             sector_source=sector_source, inst_adhoc=True if adhoc else None,
                                             circuit_boosted=True if circuit_boosted else None,
-                                            evidence=evidence_tag(evidence)))
+                                            evidence=evidence_tag(evidence), **tqe))
 
     def ansatz(self, cfg, inst, root=None):
         A, sv = confined_arm_ansatz(inst, cfg, cfg.effort, root)
