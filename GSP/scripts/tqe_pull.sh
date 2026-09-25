@@ -18,7 +18,7 @@ while true; do
     mkdir -p "$RES/incoming/$h"
     ok=1
     for d in runs logs; do
-      rsync -a --partial -e "$SSH" "$h:Quantum_Computing/GSP/results_tqe/$d/" "$RES/incoming/$h/$d/" >/dev/null 2>&1 || ok=0
+      rsync -a --partial -e "$SSH" "$h:Quantum_Computing/GSP/results_tqe/$d/" "$RES/incoming/$h/$d/" >/dev/null 2>&1; rc=$?; [ $rc = 0 ] || [ $rc = 24 ] || ok=0   # 24 = files vanished mid-copy (live worker): fine
     done
     n=$(find "$RES/incoming/$h/runs" -name run.json 2>/dev/null | wc -l)
     echo "[$(date -u +%FT%TZ)] $h: $([ $ok = 1 ] && echo pulled || echo 'pull FAILED') ($n run.json mirrored)"
