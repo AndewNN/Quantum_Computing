@@ -111,6 +111,11 @@ def sample_seed(rec: dict, root=None) -> int:
     if rec.get("seed") is not None:
         return int(rec["seed"])
     from ..arms.base import draw_of, restart_seed
+    if rec.get("inst_adhoc"):
+        # an ad hoc instance has no seed-table row (the TQE root holds none): the §1.1 formula the table holds
+        from ..instances.draws import restart_seed as restart_seed_formula
+        d = draw_of(rec["inst_id"])
+        return restart_seed_formula(int(d[1:3]), int(d[4:7]), 0)
     return restart_seed(draw_of(rec["inst_id"]), 0, root)
 
 

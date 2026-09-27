@@ -185,3 +185,14 @@ def test_extras_gate_matched_and_restarts():
     assert len(R) == 1050 and all(s["kw"]["restart"] == 1 for s in R)
     s = next(x for x in R if x["inst_id"] == "N05e003q1.5")
     assert s["seed"] == tqe.restart_seed_formula(5, 3, 1) == 4001 + 4099 * 3 + 4999 * 5 + 5099
+
+
+def test_sample_seed_adhoc_without_seed_table(tmp_path):
+    """A2 (seed None) on an ad hoc instance: the post-run sampling seed is the §1.1 formula, no seed table read
+    (the TQE root has none; 2026-09-27 every A2 postrun failed there)."""
+    from gsp.metrics.postrun import sample_seed
+    rec = {"seed": None, "inst_adhoc": True, "inst_id": "N04e007q1.5"}
+    assert sample_seed(rec, tmp_path) == tqe.restart_seed_formula(4, 7, 0) == 4001 + 4099 * 7 + 4999 * 4
+    assert sample_seed(dict(rec, seed=123), tmp_path) == 123
+    with pytest.raises(FileNotFoundError):
+        sample_seed(dict(rec, inst_adhoc=None), tmp_path)                   # frozen: the table is still required
