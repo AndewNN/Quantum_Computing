@@ -196,3 +196,26 @@ def test_sample_seed_adhoc_without_seed_table(tmp_path):
     assert sample_seed(dict(rec, seed=123), tmp_path) == 123
     with pytest.raises(FileNotFoundError):
         sample_seed(dict(rec, inst_adhoc=None), tmp_path)                   # frozen: the table is still required
+
+
+def test_sector_view_objective_bf_adhoc(tmp_path):
+    """The objective-aware cell on a root without sector files (TQE): the BF list is rebuilt ad hoc, equal to the
+    S2 brute-force reference that a sector file stores as bf_rank_idx; the GA list still needs the file."""
+    from gsp.arms.qaoa import legacy_rank, sector_view
+    from gsp.sectors.ga import brute_force, problem_from_instance
+    from gsp.store.paths import sectors_dir
+    inst, _ = adhoc_instance(5, 0, 1.5)
+    sv = sector_view(inst, "objective", 12, "bf", tmp_path)
+    ref = brute_force(problem_from_instance(inst, "objective"), keep=24)["rank_idx"][:12]   # K lists are prefixes
+    assert sv.source == "bf" and np.array_equal(sv.rank_idx, ref) and np.array_equal(sv.idx, np.sort(ref))
+    assert np.array_equal(sector_view(inst, "violation", 12, "bf", tmp_path).rank_idx, legacy_rank(inst, 12))
+    with pytest.raises(FileNotFoundError):
+        sector_view(inst, "objective", 12, "ga", tmp_path)
+    files = sorted(sectors_dir().glob("sectors_*_objective_K12.npz"))[:3]
+    if not files:
+        pytest.skip("no frozen objective sector files")
+    from gsp.instances.instance import load_instance
+    for f in files:
+        z = np.load(f, allow_pickle=True)
+        frozen = load_instance(str(z["scope_id"]))
+        assert np.array_equal(sector_view(frozen, "objective", 12, "bf", tmp_path).rank_idx, z["bf_rank_idx"][:12])

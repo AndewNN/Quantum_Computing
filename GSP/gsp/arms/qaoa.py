@@ -82,10 +82,15 @@ def sector_view(inst, rule: str, K: int, source: str = "ga", root=None) -> Secto
     from ..sectors.select import sector_scope
     have_file = sector_path(sector_scope(inst.inst_id, rule), rule, K, root).exists()
     if not have_file:
-        if source != "bf" or rule != "violation":
-            raise FileNotFoundError(f"no {rule} K={K} sector file for {inst.inst_id} (only the violation BF list "
+        if source != "bf":
+            raise FileNotFoundError(f"no {rule} K={K} sector file for {inst.inst_id} (only the BF lists "
                                     "can be rebuilt ad hoc)")
-        r = legacy_rank(inst, K)
+        if rule == "violation":
+            r = legacy_rank(inst, K)
+        else:
+            # the sector file's bf_rank_idx: the S2 brute-force reference under the objective rule's order
+            from ..sectors.ga import brute_force, problem_from_instance
+            r = brute_force(problem_from_instance(inst, rule), keep=int(K))["rank_idx"][:K].astype(np.int64)
         return SectorView(n=int(inst.n), idx=np.sort(r), rank_idx=r, source="bf", seed_ga=None)
     sec = load_sector(inst.inst_id, rule, K, root)
     if source == "ga":
